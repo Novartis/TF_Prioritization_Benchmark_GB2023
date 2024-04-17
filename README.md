@@ -1,4 +1,4 @@
-# tf_tool_benchmark
+# TF enrichment tools benchmark
 
 A [workflowr][] project.
 
