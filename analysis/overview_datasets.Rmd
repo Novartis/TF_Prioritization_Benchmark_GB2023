@@ -1,1 +1,209 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/overview_datasets.Rmd
+---
+title: "Overview of Datasets"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+# Introduction
+
+## Overview 
+
+```{r overview_analysis1}
+# Load libraries
+library(tidyverse)
+library(cowplot)
+library(jsonlite)
+library(ggsci)
+library(ggVennDiagram)
+library(stringr)
+
+# Load utils.functions file
+source("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+# Read in config file and extract dataset and experiment names
+config <- read_json("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/snakemake_chip//config.json")$data
+datasets <- names(config)
+experiments.list <- unlist(lapply(config, function(dataset){names(dataset)}))
+
+# Create table containing study and label names and to which study type group they belong
+experiments.table <- study_type()
+
+# Create a dataframe containing the dataset name, shortened experiment name, the studied transcription factor and study type
+general.info <- lapply(experiments.list, function(experiment) {
+  data.frame(label=experiment[[1]]) %>%
+    mutate(label = gsub('H3K27(A|a)c_', '', label),
+           label = gsub("\\..*", "", label))
+}) %>% bind_rows
+
+general.info$study <- gsub("\\.*[[:digit:]]$", "", names(experiments.list))
+general.info$study <- gsub("\\.*[[:digit:]]$", "", general.info$study)
+
+general.info <- general.info %>% 
+  left_join(experiments.table, by=c("study", "label"))
+
+general.info <- general.info %>%
+  mutate(label = gsub('H3K27(A|a)c_', '', label),
+         tf = gsub('_.*', '', label),
+         label = gsub("\\..*", "", label))
+
+# Get number of replicates per experiment
+rep.table <- replicates()
+
+# Add the number of replicates for each experiment to the general.info table
+general.info <- general.info %>% 
+  left_join(rep.table, by=c("study", "label"))
+
+# Print how many datasets and experiments there are
+sprintf("There are %s datasets and %s experiments.", length(unique(general.info$study)), nrow(general.info))
+```
+
+## Number of experiments grouped by study type
+
+```{r overview_analysis2}
+# Create a barplot showing the number of experiments grouped by study type
+gg.generalHistogram <- ggplot(general.info, aes(x = reorder(type, type, function(x)-length(x)), fill = type)) + 
+  geom_bar(show.legend = FALSE, colour="black") + 
+  theme_cowplot() + theme(axis.title.x=element_blank()) + scale_fill_igv() +
+  ylab("")
+
+print(gg.generalHistogram)
+```
+
+## Number of experiments grouped by transcription factor family 
+
+```{r overview_analysis3}
+general.info <- addLambertTfFamilies(list(general.info=general.info))[["general.info"]]
+
+# Create a barplot showing the number of experiments grouped by transcription factor family studied by the experiments
+gg.generalHistogram <- ggplot(general.info, aes(x = reorder(tf_family, tf_family, function(x)length(x)), fill = tf_family)) + 
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot() + theme(axis.title.y=element_blank()) + 
+  coord_flip() +
+  scale_fill_igv() +
+  ylab("")
+
+print(gg.generalHistogram)
+```
+
+## Number of experiments grouped by the number of replicates 
+
+```{r overview_analysis4}
+# Create a barplot showing the number of experiments grouped by the number of replicates they have
+gg.generalHistogram <- ggplot(general.info, aes(x = reorder(rep, rep, function(x)-length(x)), fill = rep)) + 
+  geom_bar(show.legend = FALSE, colour="black") + 
+  theme_cowplot() + theme(axis.title.x=element_blank()) + scale_fill_igv() +
+  ylab("")
+  
+print(gg.generalHistogram)
+```
+
+## Number of experiments grouped by antibody type 
+
+```{r overview_analysis5}
+general.info <- general.info %>%
+  left_join(antibody_type()) %>%
+  mutate(antibody = case_when(
+    antibody == "Other (Kimura et al, 2008)" ~ "Other",
+    antibody != "Other (Kimura et al, 2008)" ~ antibody
+  )) %>%
+  mutate(antibody = case_when(
+    antibody == "Abcam ab177178" ~ "Other",
+    antibody != "Abcam ab177178" ~ antibody
+  )) %>%
+  ungroup() %>%
+  distinct()
+
+# Create a barplot showing the number of experiments grouped by antibody type studied by the experiments
+gg.generalHistogram <- ggplot(general.info, aes(x = reorder(antibody, antibody, function(x)-length(x)), fill = antibody)) + 
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot() + theme(axis.title.y=element_blank()) + 
+  scale_fill_igv() +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + 
+  theme(axis.text=element_text(size=10))
+
+print(gg.generalHistogram)
+```
+
+## Number of experiments grouped by reference genome 
+
+```{r overview_analysis6}
+general.info <- general.info %>%
+  left_join(refGenome())
+
+# Create a barplot showing the number of experiments grouped by antibody type studied by the experiments
+gg.generalHistogram <- ggplot(general.info, aes(x = refGenome, fill = refGenome)) + 
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot() + theme(axis.title.y=element_blank()) + 
+  scale_fill_igv() +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + 
+  theme(axis.text=element_text(size=10))
+
+print(gg.generalHistogram)
+```
+
+## Number of experiments grouped by bio sample
+
+```{r overview_analysis7}
+general.info <- general.info %>%
+  left_join(biosample_type())
+
+# Create a barplot showing the number of experiments grouped by antibody type studied by the experiments
+gg.generalHistogram <- ggplot(general.info, aes(x = bio_sample, fill = bio_sample)) + 
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot() + theme(axis.title.y=element_blank()) + 
+  scale_fill_igv() +
+  ylab("") + xlab("") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 10)) + 
+  theme(axis.text=element_text(size=10))
+
+print(gg.generalHistogram)
+```
+
+## Venn diagram of experiments with RNAseq
+```{r overview_analysis8}
+## Read in config file of RNAseq and extract dataset and experiment names
+#configRNA <- read_json("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/rnaseq/config.json")$data
+#datasetsRNA <- names(configRNA)
+#
+#rna <- lapply(datasetsRNA, function(name) {
+#  data.frame(study=name,
+#             label=names(configRNA[[name]])) %>%
+#    unnest() %>%
+#    mutate(label = gsub('H3K27(A|a)c_', '', label),
+#           label = gsub("\\..*", "", label),
+#           dataset=paste(study, label, sep="_")) %>%
+#    dplyr::select(dataset)
+#}) %>% bind_rows
+#
+#chip <- general.info %>% 
+#  mutate(dataset=paste(study, label, sep="_")) %>%
+#  dplyr::select(dataset)
+#
+#venn.data <- process_data(Venn(list(chipseq=chip$dataset, rnaseq=rna$dataset)))
+#
+#ggplot() +
+#  geom_sf(aes(fill=count), data = venn_region(venn.data), show.legend = F) +
+#  geom_sf(size = 0.5, color = "black", data = venn_setedge(venn.data)) +
+#  geom_sf_text(aes(label = name), data = venn_setlabel(venn.data), nudge_y = c(0.5)) +
+#  geom_sf_label(aes(label=count), fontface = "bold", data = venn_region(venn.data)) +
+#  theme_void()
+#
+#
+```
+
+```{r saveData}
+#saveRDS(general.info, file="output/benchmark_data/chipseq/overview.RDS")
+```

@@ -1,1 +1,5 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/README.md
+# tf_tool_benchmark
+
+A [workflowr][] project.
+
+[workflowr]: https://github.com/jdblischak/workflowr

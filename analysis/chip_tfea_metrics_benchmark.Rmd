@@ -1,1 +1,160 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/chip_tfea_metrics_benchmark.Rmd
+---
+title: "ChIP-seq - TFEA benchmark using different metrics"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+# Introduction
+
+Underneath are some summary plots shown for the output of TFEA for all data sets in the benchmark. TFEA was run for each experiment in each data set using background peaks calculated by a differential peak analysis. For the plots underneath we calculated for each experiment on which rank TFEA finds the transcription factor examined in the study and then plot the distribution of all the ranks grouped by different variables of interest.
+
+```{r data_preparation}
+# Load libraries
+library(tidyverse)
+library(cowplot)
+library(ggsci)
+
+# Load utils.functions file
+source("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+# Define output path
+out.path <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/benchmark_data/chipseq_metrics//tfea/'
+if(!dir.exists(out.path)) dir.create(out.path)
+
+var.dict <- c("E-Score" = T, "Corrected E-Score" = T, 'Events' = T, 
+              "P-adj" = F, "Corrected P-adj" = F)
+
+# Read in all knownResults.txt output files from TFEA for every dataset
+tfea.txts <- list.files("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/data/chipseq/",
+                          recursive = T, full.names = T, pattern = 'results.txt')
+tfea.txts <- tfea.txts[-grep(tfea.txts, pattern = 'benchmark_(rmd|neutral)_bg')]
+tfea.txts <- tfea.txts[grepl("TFEA", tfea.txts)]
+
+# Create dataframe with dataset, experiment and motif name and their p-value
+readInTfeaTxt <- function(tfea.txt) {
+  conds <- unlist(str_split(tfea.txt, pattern = '/'))
+  tfea.results <- read_tsv(tfea.txt, show_col_types = FALSE) %>%
+  dplyr::rename(motif_name = 1) %>% #, p_value = 8) %>%
+  mutate(study = conds[11], label = conds[16], possible_ranks=length(motif_name)) %>%
+  dplyr::select(study, label, motif_name, names(var.dict), possible_ranks)
+ 
+  tfea.results
+} 
+
+# Check if ranking results *.rds  exists
+if(!file.exists(file.path(out.path, "TFEA_benchmark.RDS"))) {
+  # Apply both function to the all experiments
+  tfea.results <- lapply(tfea.txts, readInTfeaTxt)  %>% bind_rows
+  
+  tfea.list <- lapply(names(var.dict), function(x) tfea.results) 
+  names(tfea.list) <- names(var.dict)
+  
+  # Create empty topTen list and ROC/PR list for unstringent and stringent and info
+  top.ten <- sapply(names(tfea.list),function(x) NULL)
+  roc.pr.str <- sapply(names(tfea.list),function(x) NULL)
+  roc.pr.unstr <- sapply(names(tfea.list),function(x) NULL)
+  info.df <- sapply(names(tfea.list),function(x) NULL)
+  topMotifs.df <- sapply(names(tfea.list),function(x) NULL)
+  
+  
+  # Create rankings 
+  for(tfea.name in names(tfea.list)) {
+    l <- createSummaryDF(tfea.list[[tfea.name]], tfea.name, desc=var.dict[[tfea.name]], 
+                         lambert=TRUE)
+    
+    tfea.list[[tfea.name]] <- l$df
+    top.ten[[tfea.name]] <- l$top.ten
+    roc.pr.str[[tfea.name]] <- l$roc.pr.str
+    roc.pr.unstr[[tfea.name]] <- l$roc.pr.unstr
+    info.df[[tfea.name]] <- l$info.df
+    topMotifs.df[[tfea.name]] <- l$topMotifs.df
+  }
+  
+  
+} else {
+  # Read results
+  tfea.list <- read_rds(file.path(out.path, "TFEA_benchmark.RDS"))
+  top.ten <- read_rds(file.path(out.path, "TFEA_topTen.RDS"))
+  roc.pr.str <- read_rds(file.path(out.path, "TFEA_roc_pr_str.RDS"))
+  roc.pr.unstr <- read_rds(file.path(out.path, "TFEA_roc_pr_unstr.RDS"))
+  info.df <- read_rds(file.path(out.path, "TFEA_info.RDS"))
+  topMotifs.df <- read_rds(file.path(out.path, "TFEA_topMotifs_lambert.RDS"))
+}
+
+```
+
+The number of studies TFEA succesfully run for: &emsp; `r length(tfea.txts)` \
+
+The number of studies TFEA included the studied transcription factor in their results at all: &emsp; `r nrow(tfea.list[[1]])`
+
+
+## TFEA rank analysis grouped by type {.tabset}
+
+```{r tfea_rank_analysis1, results='asis'}
+tfea.list <- rankBoxStudyType(tfea.list, "TFEA")
+```
+
+## TFEA rank analysis grouped by transcription factor {.tabset}
+
+```{r tfea_rank_analysis2, results='asis'}
+tfea.list <- rankBoxTfFamily(tfea.list, "TFEA")
+```
+
+## TFEA rank analysis grouped by number of replicates {.tabset}
+
+```{r tfea_rank_analysis3, results='asis'}
+tfea.list <- rankBoxReplicates(tfea.list, "TFEA")
+```
+
+## TFEA rank analysis grouped by antibody type {.tabset}
+
+```{r tfea_rank_analysis4, results='asis'}
+tfea.list <- rankBoxAntibodyType(tfea.list, "TFEA")
+```
+
+## TFEA rank analysis grouped by reference genome {.tabset}
+
+```{r tfea_rank_analysis5, results='asis'}
+tfea.list <- rankBoxRefGenome(tfea.list, "TFEA")
+```
+
+## TFEA rank analysis grouped by bio sample {.tabset}
+
+```{r tfea_rank_analysis6, results='asis'}
+tfea.list <- rankBoxBioSample(tfea.list, "TFEA")
+```
+
+## TFEA ROC curve {.tabset}
+
+```{r tfea_roc, results='asis'}
+plotRoc(roc.pr.str, roc.pr.unstr, "TFEA")
+```
+
+## TFEA PR curve {.tabset}
+
+```{r tfea_pr, results='asis'}
+plotPr(roc.pr.str, roc.pr.unstr, "TFEA")
+```
+
+```{r saveData}
+if(!file.exists(file.path(out.path, "TFEA_benchmark.RDS"))) {
+  # Save results as *.rds
+  saveRDS(tfea.list, file=file.path(out.path, "TFEA_benchmark.RDS"))
+  saveRDS(top.ten, file=file.path(out.path, "TFEA_topTen.RDS"))
+  saveRDS(roc.pr.str, file=file.path(out.path, "TFEA_roc_pr_str.RDS"))
+  saveRDS(roc.pr.unstr, file=file.path(out.path, "TFEA_roc_pr_unstr.RDS"))
+  saveRDS(info.df, file=file.path(out.path, "TFEA_info.RDS"))
+  saveRDS(topMotifs.df, file=file.path(out.path, "TFEA_topMotifs_lambert.RDS"))
+}
+```

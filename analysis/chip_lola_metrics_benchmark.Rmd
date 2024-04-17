@@ -1,1 +1,170 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/chip_lola_metrics_benchmark.Rmd
+---
+title: "ChIP-seq LOLA benchmark using different metrics"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+# Introduction
+
+Underneath are some summary plots shown for the output of LOLA for all data sets in the benchmark. LOLA was run for each experiment in each data set using background peaks calculated by a differential peak analysis. For the plots underneath we calculated for each experiment on which rank LOLA finds the transcription factor examined in the study and then plot the distribution of all the ranks grouped by different variables of interest.
+
+```{r data_preparation}
+# Load libraries
+library(tidyverse)
+library(cowplot)
+library(ggsci)
+
+# Load utils.functions file
+source("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+# Define output path
+out.path <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/benchmark_data/chipseq_metrics/lola/'
+if(!dir.exists(out.path)) dir.create(out.path)
+
+var.dict <- c('pValueLog' = T, 'oddsRatio' = T, 'support' = T,
+              'rnkPV' = F, 'rnkOR' = F, 'rnkSup' = F, 
+              'maxRnk' = F, 'meanRnk' = F) 
+
+# Read in all knownResults.txt output files from lola for every dataset
+lola.txts <- list.files("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/data/chipseq/",
+                          recursive = T, full.names = T, pattern = 'lola.txt')
+lola.txts <- lola.txts[-grep(lola.txts, pattern = 'benchmark_(rmd|neutral)_bg')]
+
+
+# Create dataframe with dataset, experiment and motif name and their p-value
+readInLolaTxt <- function(lola.txt) {
+  conds <- unlist(str_split(lola.txt, pattern = '/'))
+  lola.results <- read_tsv(lola.txt, show_col_types = FALSE) %>%
+#  dplyr::rename(motif_name = 18, p_value = 4) %>%
+  dplyr::rename(motif_name = 18) %>% #, rank = 11) %>%  
+  mutate(study = conds[11], label = conds[16], possible_ranks=length(motif_name)) %>%
+#  dplyr::select(study, label, motif_name, p_value, possible_ranks)
+  dplyr::select(study, label, motif_name, names(var.dict), possible_ranks) %>%
+  filter(!is.na(motif_name))
+ 
+  lola.results
+} 
+
+# Check if ranking results *.rds  exists
+if(!file.exists(file.path(out.path, "lola_benchmark.RDS"))) {
+  # Apply both function to the all experiments
+  lola.results <- lapply(lola.txts, readInLolaTxt)  %>% bind_rows
+  
+  lola.list <- lapply(names(var.dict), function(x) lola.results) 
+  names(lola.list) <- names(var.dict)
+  
+  # Create empty topTen list and ROC/PR list for unstringent and stringent and info
+  top.ten <- sapply(names(lola.list),function(x) NULL)
+  roc.pr.str <- sapply(names(lola.list),function(x) NULL)
+  roc.pr.unstr <- sapply(names(lola.list),function(x) NULL)
+  info.df <- sapply(names(lola.list),function(x) NULL)
+  
+  
+  # Create rankings 
+  for(lola.name in names(lola.list)) {
+    # Calculate for each experiment on what rank lola finds the transcription factor examined in the study
+    lola.list[[lola.name]] <- lola.list[[lola.name]] %>%
+      mutate(label = gsub('H3K27(A|a)c_', '', label),
+             label = gsub("\\..*", "", label),
+             possible_ranks=max(possible_ranks),
+             tf = gsub('_.*', '', label),
+             stringent = str_to_upper(motif_name),
+             stringent = gsub("\\_.*", "", stringent),
+             stringent = gsub("\\(.*", "", stringent)) 
+    
+    l <- createSummaryDF(lola.list[[lola.name]], lola.name, desc=var.dict[[lola.name]], 
+                         lambert=FALSE, lola=FALSE)
+    
+    lola.list[[lola.name]] <- l$df
+    top.ten[[lola.name]] <- l$top.ten
+    roc.pr.str[[lola.name]] <- l$roc.pr.str
+    roc.pr.unstr[[lola.name]] <- l$roc.pr.unstr
+    info.df[[lola.name]] <- l$info.df
+  }
+
+
+} else {
+  lola.list <- file.path(out.path, "lola_benchmark.RDS")
+  top.ten <- file.path(out.path, "lola_topTen.RDS")
+  roc.pr.str <- file.path(out.path, "lola_roc_pr_str.RDS")
+  roc.pr.unstr <- file.path(out.path, "lola_roc_pr_unstr.RDS")
+  info.df <- file.path(out.path, "lola_info.RDS")
+}
+
+
+```
+
+The number of studies LOLA succesfully run for: &emsp; `r length(lola.txts)` \
+
+The number of studies LOLA included the studied transcription factor in their results at all: &emsp; `r nrow(lola.list[[1]])`
+
+
+## LOLA rank analysis grouped by type {.tabset}
+
+```{r lola_rank_analysis1, results='asis'}
+lola.list <- rankBoxStudyType(lola.list, "LOLA")
+```
+
+## LOLA rank analysis grouped by transcription factor {.tabset}
+
+```{r lola_rank_analysis2, results='asis'}
+lola.list <- rankBoxTfFamily(lola.list, "LOLA")
+```
+
+## LOLA rank analysis grouped by number of replicates {.tabset}
+
+```{r lola_rank_analysis3, results='asis'}
+lola.list <- rankBoxReplicates(lola.list, "LOLA")
+```
+
+## LOLA rank analysis grouped by antibody type {.tabset}
+
+```{r lola_rank_analysis4, results='asis'}
+lola.list <- rankBoxAntibodyType(lola.list, "LOLA")
+```
+
+## LOLA rank analysis grouped by reference genome {.tabset}
+
+```{r ismara_rank_analysis5, results='asis'}
+lola.list <- rankBoxRefGenome(lola.list, "LOLA")
+```
+
+## LOLA rank analysis grouped by bio sample {.tabset}
+
+```{r ismara_rank_analysis6, results='asis'}
+lola.list <- rankBoxBioSample(lola.list, "LOLA")
+```
+
+## LOLA ROC curve {.tabset}
+
+```{r lola_roc, results='asis'}
+plotRoc(roc.pr.str, roc.pr.unstr, "LOLA")
+```
+
+## LOLA PR curve {.tabset}
+
+```{r lola_pr, results='asis'}
+plotPr(roc.pr.str, roc.pr.unstr, "LOLA")
+```
+
+```{r saveData}
+if(!file.exists(file.path(out.path, "lola_benchmark.RDS"))) {
+  # Save results as *.rds
+  saveRDS(lola.list, file=file.path(out.path, "lola_benchmark.RDS"))
+  saveRDS(top.ten, file=file.path(out.path, "lola_topTen.RDS"))
+  saveRDS(roc.pr.str, file=file.path(out.path, "lola_roc_pr_str.RDS"))
+  saveRDS(roc.pr.unstr, file=file.path(out.path, "lola_roc_pr_unstr.RDS"))
+  saveRDS(info.df, file=file.path(out.path, "lola_info.RDS"))
+}
+```

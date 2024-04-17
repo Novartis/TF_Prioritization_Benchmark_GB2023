@@ -1,1 +1,1917 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/paper.Rmd
+---
+title: "Benchmark paper"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+
+```{r initializeData}
+# Load libraries
+library(ggrepel)
+library(DiagrammeR)
+library(tidyverse)
+library(ggplot2)
+library(ComplexHeatmap)
+library(cowplot)
+library(ggsci)
+library(DiagrammeRsvg)
+library(rsvg)
+library(reshape2)
+library(universalmotif)
+library(kableExtra)
+library(circlize)
+library(ggpubr)
+library(Hmisc)
+library(goftest)
+library(party)
+library(gridBase)
+library(splitTools)
+library(viridis)
+
+
+# Set path of project as home directory
+setwd("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/")
+# Load utils.functions file
+source("/home/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+## CHANGE HERE: Set output directory for plots
+output_path <- "/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/paperPlots_revisions/"
+if(!dir.exists(output_path)) dir.create(output_path)
+ 
+# Path to benchmark data
+benchmarkData.path <- "output/benchmark_data/chipseq"
+
+# Get all topTen, benchmark, roc_pr_str, roc_pr_unstr .RDS files in the benchmark data folder
+topTen.files <- list.files(benchmarkData.path, pattern = "topTen.RDS",
+                           full.names = TRUE, recursive = TRUE)
+benchmark.files <- list.files(benchmarkData.path, pattern = "benchmark.RDS",
+                              full.names = TRUE, recursive = TRUE)
+roc_pr_str.files <- list.files(benchmarkData.path, pattern = "roc_pr_str.RDS", 
+                               full.names = TRUE, recursive = TRUE)
+roc_pr_unstr.files <- list.files(benchmarkData.path, pattern = "roc_pr_unstr.RDS",
+                                 full.names = TRUE, recursive = TRUE)
+info.files <- list.files(benchmarkData.path, pattern = "_info.RDS", 
+                         full.names = TRUE, recursive = TRUE)
+topMotifs.files <- list.files(benchmarkData.path, pattern = "_topMotifs_lambert.RDS", 
+                              full.names = TRUE, recursive = TRUE)
+
+# Read in overview df from overview_datasets.Rmd
+overview.df <- readRDS(paste0(benchmarkData.path, "/overview.RDS")) 
+
+# List specifying which methods that do not have a with and without background 
+# option if they belong to the with background group
+methodsWithBackground <- c("LOLA")
+# Create vector containing ranking names
+ranking <- c("rank", "rankUnstr", "avRank", "avRankUnstr")
+ranking.tab <- list(rank="Stringent rank", rankUnstr="Unstringent rank", 
+                    avRank="Stringent rank (ties=average)", 
+                    avRankUnstr="Unstringent rank (ties=average)")
+
+# Function that reads in the given files and adds 
+# the method name and if the method has background and/or lambert
+readFiles <- function(file){
+  # Get method name
+  method <- tail(str_split(file, pattern="/")[[1]], n=1)
+  method <- str_split(method, pattern ="_")[[1]][1]
+  
+  if(method!="tfmotiftools"){
+    
+    # Read in RDS file
+    rds <- readRDS(file)
+    
+    # If it is a list then apply to every elemnt
+    if(!is.data.frame(rds)){
+      results <- data.frame()
+      
+      # For each element in list, read it in and add lambert and background if neccesary
+      # to method name
+      for (name in names(rds)) {
+        
+        if(grepl("(no|without|di-nucleotide)", name, ignore.case=TRUE)){
+          bg <- FALSE
+          if (grepl("lambert", name)){
+            methodNew <- paste0(method, " + Lambert")
+          } else {
+            methodNew <- method
+          }
+        } else {
+          bg <- TRUE
+          if (grepl("lambert", name)){
+            methodNew <- paste0(method, " + Lambert + bg")
+          } else {
+            methodNew <- paste0(method, " + bg")
+          }
+        }
+        
+        if(!is_empty(rds[[name]])){
+          results <- rds[[name]] %>% 
+            mutate(method=methodNew) %>% 
+            bind_rows(results)
+        }
+      }
+    } else {
+      # If there is only one element in th RDS file, we only need to check if the 
+      # method name is in methodsWithBackground to add the backgorund column
+      results <- rds %>% mutate(method=method)
+    }
+    
+    # Return dataframe containig all dfs in the RDS file
+    results %>%
+      mutate(method = gsub('homer', 'HOMER', method), 
+             method = gsub('gimmeMotifs', 'GimmeMotifs', method), 
+             method = gsub('lola.*', 'LOLA', method))
+  }
+}
+
+# Apply readFiles to all topTen, benchmark and info files
+topTen <- lapply(topTen.files, readFiles) %>% bind_rows() %>% distinct()
+methods <- lapply(benchmark.files, readFiles) %>% 
+  bind_rows() %>% 
+  ungroup() %>%
+  mutate(type = case_when(
+    type == "kd, oe" ~ "kd",
+    type != "kd, oe" ~ type
+  )) %>%
+  mutate(antibody = case_when(
+    antibody == "Other (Kimura et al, 2008)" ~ "Other",
+    antibody != "Other (Kimura et al, 2008)" ~ antibody
+  )) %>%
+  mutate(antibody = case_when(
+    antibody == "Abcam ab177178" ~ "Other",
+    antibody != "Abcam ab177178" ~ antibody
+  )) %>%
+  mutate(dataset=paste(study, label, sep = "_")) %>%
+  distinct() 
+
+roc_pr_str <- lapply(roc_pr_str.files, readFiles) %>% 
+  bind_rows() %>% 
+  distinct() %>%
+  filter(tp=="84") %>%
+  dplyr::select(-tp)
+roc_pr_unstr <- lapply(roc_pr_unstr.files, readFiles) %>% 
+  bind_rows() %>% 
+  distinct() %>%
+  filter(tp=="84") %>%
+  dplyr::select(-tp)
+
+info <- lapply(info.files, readFiles) %>% bind_rows() %>% distinct()
+info <- info %>%
+  dplyr::rename(rank=tfs_str,
+                rankUnstr=tfs_unstr)
+
+# Add labels recovered and processed methods to methods
+methods <- methods %>%
+  left_join(info %>%
+              dplyr::rename(labelsStr=rank,
+                            labelsUnstr=rankUnstr), by="method")
+
+topMotifs <- lapply(topMotifs.files, readFiles) %>% bind_rows()
+
+roc_pr.list <- list(rank=roc_pr_str, rankUnstr=roc_pr_unstr)
+```
+
+
+```{r plotConstants}
+# Create colours
+numberOfColours <- length(unique(methods$method)) + 4
+col <- c(pal_igv("default")("51")[1:5], pal_igv("default")("51")[8], 
+             pal_igv("default")("51")[10], pal_igv("default")("51")[12:numberOfColours]) 
+names(col) <- levels(factor(unique(methods$method))) %>% 
+  gsub('homer', 'HOMER', .) %>% gsub('lambert', 'Lambert', .) %>%
+  gsub('gimmeMotifs', 'GimmeMotifs', .) %>% gsub('lola.*', 'LOLA', .) 
+  
+
+# Font size
+fs <- 7
+
+# Set a seed
+set.seed(11)
+```
+
+
+```{r addRankOverDiffPeaks}
+# Read in all peaks and they're log2 fold change computed in diff_peak.R for all experiments
+peak.path <- file.path("/home/steinse5/projects/tf_tool_benchmark/data/chipseq")
+peak.files <- list.files(peak.path, full.names = T, recursive = T,
+                         pattern = "allPeak.txt")
+
+# Create dataframe with dataset, experiment and peak information from allPeak.txt files 
+readInPeaksTxt <- function(peak.txt) {
+  # Extract dataset and experiment name
+  conds <- unlist(str_split(peak.txt, pattern = '/'))
+  
+  # Create data frame with peak information, dtaset and experiment
+  peak.results <- read_tsv(peak.txt, show_col_types = FALSE) %>%
+  mutate(study = conds[8], 
+         label = conds[13],
+         label = gsub('H3K27(A|a)c_', '', label),
+         label = gsub("\\..
+                      *", "", label)) %>%
+  dplyr::select(-peak.strand)
+  
+  # Remove peak. from column names (not necessary)
+  names(peak.results) <- gsub("peak.", "", names(peak.results))
+  
+  if(any(grepl("effect_baseMean", names(peak.results)))){
+    peak.results <- peak.results %>%
+      dplyr::select(-c("effect_baseMean", "effect_pvalue", "effect_padj", "scores")) %>%
+      dplyr::rename(lfc = effect_log2FoldChange)
+  }
+  
+  peak.results
+} 
+
+# Apply function to the all datasets
+peak.all <- lapply(peak.files, readInPeaksTxt)  %>% bind_rows
+
+# Create new data frame containing only study, label and the number of differential peaks
+diffPeak <- peak.all %>%
+  group_by(study, label) %>%
+  mutate(num_diff_peaks_th = sum(lfc > 1.5)) %>%
+  dplyr::select(study, label, num_diff_peaks_th) %>%
+  distinct()
+
+# Left joind methods list elemnts with diffPeak table, so there are new columns
+# containing the number of diff peaks at a certain threshold for each experiment
+methods <- methods %>% 
+  left_join(diffPeak, by=c("study", "label")) %>%
+  ungroup() %>%
+  distinct()
+```
+
+
+```{r calculateCorrelationOfPeakvsRank}
+# Create a new data frame containing method, ranking variable and number of diff peaks
+correlationRank.df <- data.frame(methods=double(),
+                                 ranking=character(),
+                                 peaks=double())
+
+# Calculate correlation between each method and its rank
+for (r in ranking) {
+  for (methods.name in unique(methods$method)) {
+    
+    # Only select rank of relevant method
+    data <- methods %>%
+      ungroup() %>%
+      filter(method==methods.name) %>%
+      dplyr::select(c("method", "num_diff_peaks_th", !!as.symbol(r))) 
+    
+    # Calculate correlation between number of diff peaks of each dataset and its rank for the according
+    # method
+    correlations <- cor(data[, r], data[, "num_diff_peaks_th"], use="complete.obs")
+
+    
+    # Add to above defined data table
+    correlationRank.df[nrow(correlationRank.df)+1, ] <- c(methods.name, r, correlations)
+    
+  }
+}
+```
+
+
+```{r prepare#LabelsBelowThresholds}
+# Create data for hitters 5/10/30 plot
+hitters.list <- lapply(ranking, function(r, m=methods){
+  
+  if(!grepl("av", r)){
+    m <- m %>%
+      mutate(rank=(rank*possible_ranks+1),
+             rankUnstr=(rankUnstr*possible_ranks+1))
+  }
+  
+  data.table <- dcast(m, method ~ dataset, value.var=r)
+  rowNames <- data.table$method
+  data.table <- data.table[, -1]
+  
+  # Cut off ranks > 300 in average ranks bc there are not comparable
+  # (Saved as NA)
+  if(grepl("av", r)){
+    data.table[data.table>300] <- NA
+  }
+
+  data.table[is.na(data.table)] <- -1
+  data.matrix <- as.matrix(data.table)
+  rownames(data.matrix) <- rowNames
+  
+  data.matrix
+  })
+names(hitters.list) <- ranking
+
+```
+
+
+```{r prepareCategorizedResults}
+# Create empty list containing categorized heatmap ranks
+heatmapCategorized.list <- sapply(names(hitters.list),function(x) NULL)
+
+# Create heatmap plots
+for(plot.name in ranking) {
+  # Prepare heatmap categorized into four groups
+  heatmapCategorized.list[[plot.name]] <- hitters.list[[plot.name]] %>%
+    as.data.frame() %>%
+    mutate_all(., funs(case_when(
+        . <= 5 & . > 0 ~ 1,
+        . <= 10 & . > 5 ~ 2,
+        . <= 30 & . > 10 ~ 3,
+        . > 30 ~ 4,
+        . == -1 ~ -1
+      )))
+}
+
+write_rds(x = heatmapCategorized.list, 
+          file = file.path('/da/dmp/cb/steinse5/projects/tf_tool_benchmark',
+                           'output/benchmark_data/chip_suppfi3_data.rds'))
+```
+
+
+```{r addQCoverRank}
+# List all chromatin align and peak quality analysis (QC) files
+chromatinalignQC.files <- list.files(peak.path, full.names = T, recursive = T,
+                         pattern = "all_qc.chromatinalign.tsv")
+peakQC.files <- list.files(peak.path, full.names = T, recursive = T,
+                         pattern = "all_qc_peak.tsv")
+
+# Read in snakemakes config file containing all datasets/experiments
+config <- read_json("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/snakemake_chip/config.json")$data
+
+## Chosen QC measures
+# align.nodup_samstat.mapped_reads
+# lib_complexity.lib_complexity.PBC1
+# align_enrich.xcor_score.NSC
+# align_enrich.xcor_score.RSC
+# 
+
+# Function to create dataframe with QC of chromatin align
+readInChromatinalignQCTxt <- function(qc.txt) {
+  conds <- unlist(str_split(qc.txt, pattern = '/'))
+  qc.results <- read_tsv(qc.txt, show_col_types = FALSE) %>%
+    dplyr::rename(unique_mapped_reads_raw="align.nodup_samstat.mapped_reads",
+                  NSC_raw="align_enrich.xcor_score.NSC",
+                  RSC_raw="align_enrich.xcor_score.RSC",
+                  PBC_raw="lib_complexity.lib_complexity.PBC1",
+                  group="Replicate Group") %>%
+    mutate(study = conds[8],
+           label=rep("", length(group))) %>%
+    dplyr::select(study, unique_mapped_reads_raw, NSC_raw, RSC_raw, PBC_raw, group, label) %>%
+    filter(!grepl("(Input|input|IgG)", group))
+ 
+  config.dataset <- config[[conds[8]]]
+  for (exp in names(config.dataset)) {
+    qc.results[which(qc.results$group==config.dataset[[exp]][["condition"]][[1]]), "label"] <- exp
+    qc.results[which(qc.results$group==config.dataset[[exp]][["control"]][[1]]), "label"] <- exp
+  }
+  
+  # Calculate mean of QC measures between condition, control and their replicates
+  qc.results <- qc.results %>%
+    group_by(label) %>%
+    summarise(unique_mapped_reads_mean=mean(unique_mapped_reads_raw),
+              NSC_mean=mean(NSC_raw),
+              RSC_mean=mean(RSC_raw),
+              PBC_mean=mean(PBC_raw)) %>%
+    mutate(label = gsub('H3K27(A|a)c_', '', label),
+           label = gsub("\\..*", "", label),
+           study=conds[8])
+  
+  qc.results
+}
+
+
+#Function to create dataframe with QC of chromatin align
+readInPeakQCTxt <- function(qc.txt) {
+  conds <- unlist(str_split(qc.txt, pattern = '/'))
+  qc.results <- read_tsv(qc.txt, show_col_types = FALSE) %>%
+    dplyr::rename(frip_raw="peak_enrich.frac_reads_in_peaks.macs2.frip",
+                  group="Replicate Group") %>%
+    mutate(study = conds[8],
+           label=rep("", length(group))) %>%
+    dplyr::select(study, frip_raw, group, label) %>%
+    filter(!grepl("(Input|input|IgG)", group))
+ 
+  config.dataset <- config[[conds[8]]]
+  for (exp in names(config.dataset)) {
+    qc.results[which(qc.results$group==config.dataset[[exp]][["condition"]][[1]]), "label"] <- exp
+    qc.results[which(qc.results$group==config.dataset[[exp]][["control"]][[1]]), "label"] <- exp
+  }
+  
+  # Calculate mean of QC measures between condition, control and their replicates
+  qc.results <- qc.results %>%
+    group_by(label) %>%
+    summarise(frip_mean=mean(frip_raw)) %>%
+    mutate(label = gsub('H3K27(A|a)c_', '', label),
+           label = gsub("\\..*", "", label),
+           study=conds[8])
+  
+  qc.results
+} 
+
+# Apply above functions to all QC files to get necessary QC information
+chromatinalignQC.results <- lapply(chromatinalignQC.files, readInChromatinalignQCTxt) %>% 
+  bind_rows()
+peakQC.results <- lapply(peakQC.files, readInPeakQCTxt) %>% 
+  bind_rows()
+
+# Join QC data frames of chromatin align and peak
+qc.df <- chromatinalignQC.results %>%
+    left_join(peakQC.results, by=c("study", "label"))
+
+# Add qc.df to methods
+methods <- methods %>%
+  left_join(qc.df, by=c("study", "label"))
+
+
+# Create a new data frame containing for every method the mean of above selected
+# QC meausures
+correlationQC.df <- data.frame(methods=double(),
+                               ranking=character(),
+                               unique_mapped_reads_mean=double(),
+                               NSC_mean=double(),
+                               RSC_mean=double(),
+                               PBC_mean=double(),
+                               frip_mean=double())
+
+# For each QC meausure calculate its correlation to the method and save into 
+# above defined data frame
+for (r in ranking) {
+  for (methods.name in unique(methods$method)) {
+    
+    # Only select rank of relevant method
+    data <- methods %>%
+      ungroup() %>%
+      filter(method==methods.name) %>%
+      dplyr::select(c("study", "label", !!as.symbol(r))) %>%
+      left_join(qc.df, by=c("study", "label")) %>%
+      dplyr::select(-c("label", "study"))
+    
+    # Calculate correlation between QC of each dataset and its rank for the accodring
+    # method
+    correlations <- unlist(lapply(names(correlationQC.df)[-(1:2)], function(qc_measure){
+      cor(data[, r], data[, qc_measure], use="complete.obs")
+    }) )
+    
+    # Add to above defined data table
+    correlationQC.df[nrow(correlationQC.df)+1, ] <- c(methods.name, r, correlations)
+    
+  }
+}
+```
+
+
+```{r addRNA}
+# Get a list of all log2fc files
+log2fc.files <- list.files(peak.path, full.names = T, recursive = T,
+                         pattern = "log2fc.tsv")
+
+# Function that reads log2fc 
+readInLog2fcTxt <- function(log2fc.txt) {
+  # Add study and label
+  conds <- unlist(str_split(log2fc.txt, pattern = '/'))
+  log2fc.results <- read_tsv(log2fc.txt, show_col_types = FALSE) %>%
+    mutate(study = conds[8], label=conds[13]) %>%
+    mutate(label = gsub('H3K27(A|a)c_', '', label),
+           label = gsub("\\..*", "", label))
+  
+  # Remove NA rows
+  log2fc.results <- log2fc.results[!is.na(log2fc.results$resid),]
+  
+  # # Remove pvalue column if present
+  # if ("padj" %in% names(log2fc.results)){
+  #   log2fc.results <- log2fc.results %>%
+  #     dplyr::select(-c(padj))
+  # }
+    
+  log2fc.results
+  }
+
+# Apply function to the all experiments
+log2fc.results <- lapply(log2fc.files, readInLog2fcTxt)  %>% bind_rows
+# Create table containing study and label names and to regexpr containing tf and tfs synonyms
+synonyms <- tf_synonyms()
+
+# Initialize list with methods.list
+methodsWithRNA <- methods
+
+# Select studies which have RNAseq (log2FC)
+methodsWithRNA <- methodsWithRNA %>%
+  filter((study %in% log2fc.results$study) & (label %in% log2fc.results$label)) %>%
+  left_join(log2fc.results, by=c("study", "label")) %>%
+  left_join(synonyms, by=c("label", "study")) %>%
+  ungroup() %>%
+  distinct()
+
+
+# Select only the log2fc of the TFs of interest
+rnaOfLabel <- methodsWithRNA %>%
+  mutate(is_tf = (str_detect(str_to_upper(resid), pattern=synonym))) %>%
+  filter(is_tf) %>%
+  dplyr::select(-c(is_tf)) %>%
+  filter(log2FoldChange>=0)
+
+# Add log2fc to methods
+methods <- methods %>%
+  left_join(rnaOfLabel %>% 
+              dplyr::select(study, label, log2FoldChange) %>%
+              distinct() %>%
+              group_by(study, label) %>%
+              summarise(log2FoldChange=dplyr::first(log2FoldChange)), by=c("study", "label")) %>%
+  ungroup() %>%
+  distinct()
+
+
+# Get number of diff genes (padj < 0.01 & abs(log2(FC))
+numberOfDiffGenes <- methodsWithRNA %>%
+  filter(padj<0.01 & abs(log2FoldChange)>1) %>%
+  ungroup() %>%
+  group_by(study, label) %>%
+  summarise(numberDiffGenes=n()) %>%
+  ungroup() %>%
+  distinct() 
+numberOfDiffGenes <- numberOfDiffGenes %>%
+  bind_rows(methodsWithRNA %>% 
+              dplyr::select(study, label) %>% 
+              distinct() %>% 
+              filter(!(study %in% numberOfDiffGenes$study) &
+                       !(label %in% numberOfDiffGenes$label)) %>%
+              mutate(numberDiffGenes =0))
+
+# Add # diff genes
+methods <- methods %>%
+  left_join(numberOfDiffGenes %>% 
+              dplyr::select(study, label, numberDiffGenes) %>%
+              distinct(), by=c("study", "label")) %>%
+  ungroup() %>%
+  distinct()
+
+# Create a new data frame containing for every method the correlation between 
+# logFoldChange of label, number of diff genes and rank
+correlationFCdiffG.df <- data.frame(methods=double(),
+                                          ranking=character(),
+                                          logFoldChange=double(),
+                                          diffGenes=double())
+
+# Compute correlations for each method and ranking between ranks and log2fc/number 
+# of diff genes
+for (r in ranking) {
+  for (methods.name in unique(methods$method)) {
+    
+    # Only select rank of relevant method
+    data <- methods %>%
+      ungroup() %>%
+      filter(method==methods.name) %>%
+      dplyr::select(c("study", "label", !!as.symbol(r), "log2FoldChange", "numberDiffGenes")) %>%
+      distinct()
+    
+    # Calculate correlation 
+    correlations.FC <- cor(data[, r], data[, "log2FoldChange"], use="complete.obs")
+    correlations.diffG <- cor(data[, r], data[, "numberDiffGenes"], use="complete.obs")
+    
+    # Add to above defined data table
+    correlationFCdiffG.df[nrow(correlationFCdiffG.df)+1, ] <- c(methods.name, r, 
+                                                                correlations.FC,
+                                                                correlations.diffG)
+  }
+}
+```
+
+
+```{r prepareCumDist}
+# List of data frames containing cum dist for stringent and unstringent ranks
+dist.list <- list(rank=data.frame(), rankUnstr=data.frame())
+
+# Function to create cum dist and perform anderson-darling test
+computeDevUni <- function(m, r){
+  
+  # Filter for method and compute cum dist with Ecdf() using the ranking variable r
+  df <- methods %>% 
+    filter(method==!!(m)) %>%
+    ungroup() %>%
+    distinct()
+  cumDist <- Ecdf(pull(df, r), pl=F)
+  
+  # # Add column for method and significance (anderson-darling test)
+  # dist <- data.frame(x=cumDist$x, y=cumDist$y-cumDist$x, y_test=cumDist$y) %>%
+  #   mutate("method"=m)
+  # dist <- dist %>% mutate(sig=ad.test(dist$y_test)$p.value)
+  
+  dist <- data.frame(x=cumDist$x, y=cumDist$y-cumDist$x) %>%
+     mutate("method"=m)
+  dist.auc <- AUC(dist$x, dist$y)
+  dist <- dist %>% 
+    mutate(sig=ad.test(na.omit(pull(df, r)))$p.value, 
+           auc=dist.auc)
+  
+  dist
+}
+
+for (name in ranking[1:2]) {
+  dist.list[[name]] <- lapply(unique(methods$method), computeDevUni, r=name) %>% bind_rows() 
+}
+```
+
+
+```{r addBestMotifType}
+lambert.path <- "/da/dmp/cb/steinse5/public_data/motifs/lambert2018/PWMs/"
+bestMotif.df <- read_tsv("/da/dmp/cb/steinse5/public_data/motifs/lambert2018/Human_TF_MotifList_v_1.01.txt") %>%
+  dplyr::select(c("HGNC symbol", "Motif evidence", "Best Motif(s)? (Figure 2A)")) %>%
+  dplyr::rename(stringent="HGNC symbol", motifType="Motif evidence", 
+                best="Best Motif(s)? (Figure 2A)") %>%
+  filter(best == TRUE) %>%
+  group_by(stringent) %>%
+  arrange(motifType) %>%
+  filter(row_number()==1) %>%
+  ungroup() %>%
+  dplyr::select(-best) %>%
+  distinct()
+
+methods <- methods %>%
+  left_join(bestMotif.df %>%
+              dplyr::rename(tf=stringent), by="tf") %>%
+  ungroup() %>%
+  distinct() 
+```
+
+
+```{r createSummaryDf}
+# Create empty list with summary table information in dfs
+table.df <- sapply(names(roc_pr.list),function(x) NULL)
+
+# Get all information together and put into one df
+for (name in names(roc_pr.list)) {
+  bars.df <- data.frame("30"=rowSums(hitters.list[[name]] <= 30 & hitters.list[[name]] >= 0),
+                        "10"=rowSums(hitters.list[[name]] <= 10 & hitters.list[[name]] >= 0),
+                        "5"=rowSums(hitters.list[[name]] <= 5 & hitters.list[[name]] >= 0)) %>%
+    dplyr::rename('# Labels in Top 30'=X30,
+                  '# Labels in Top 10'=X10,
+                  '# Labels in Top 5'=X5)
+  
+  bars.df$method <- rownames(bars.df)
+  rownames(bars.df) <- NULL
+  
+  table.df[[name]] <- roc_pr.list[[name]] %>%
+    dplyr::select(method, auc, prAuc) %>%
+    distinct() %>%
+    dplyr::rename('ROC AUC'=auc,
+                  'PR AUC'=prAuc) %>%
+    full_join(dist.list[[name]] %>%
+                dplyr::select(method, auc) %>%
+                distinct() %>%
+                dplyr::rename('Cum. Rank Dist. AUC'=auc), by="method") %>%
+    full_join(bars.df, by="method") %>%
+    full_join(info %>%
+                dplyr::select(!!as.symbol(name), method, datasets) %>%
+                dplyr::rename('Processed datasets'=datasets, 'Labels recovered'=name), 
+              by="method")
+  table.df[[name]] <- as.data.frame(table.df[[name]])
+  rownames(table.df[[name]]) <- table.df[[name]]$method
+  table.df[[name]] <- table.df[[name]] %>%
+    dplyr::select(-method)
+}
+
+
+# Create empty summary list
+bubble.list <-  sapply(names(table.df),function(x) NULL)
+
+# Rank data in summary table
+for (name in names(table.df)) {
+  # Using summary plot form above create new plot where each column is divided into
+  # one of three columns: poor, intermediate, good
+  bubble.list[[name]] <- table.df[[name]] %>%
+    mutate_at(
+      vars("ROC AUC", "PR AUC"),
+      funs(case_when(
+        . <= 0.66 ~ "poor",
+        . > 0.66 & . < 0.83 ~ "intermediate",
+        . >= 0.83 ~ "good"
+      ))
+    ) %>%
+     mutate_at(
+      vars("Cum. Rank Dist. AUC"),
+      funs(case_when(
+        . <= 0.16 ~ "poor",
+        . > 0.16 & . < 0.33 ~ "intermediate",
+        . >= 0.33 ~ "good"
+      ))
+    ) %>%
+     mutate_at(
+      vars(matches("# Labels")),
+      funs(case_when(
+        . <= max(.)/3 ~ "poor",
+        . > max(.)/3 & . < max(.)/3*2 ~ "intermediate",
+        . >= max(.)/3*2 ~ "good"
+      ))
+    ) %>%
+     mutate_at(
+      vars("Labels recovered", "Processed datasets"),
+      funs(case_when(
+        . <= 56 ~ "poor",
+        . > 56 & . < 70 ~ "intermediate",
+        . >= 70 ~ "good"
+      ))
+    ) %>%
+    mutate(method=rownames(.), .before=1) %>%
+    pivot_longer(colnames(.)[-1]) %>%
+    mutate(sums=case_when(
+        value == "good" ~ 3,
+        value == "intermediate" ~ 2,
+        value == "poor" ~ 1
+      )) %>%
+    group_by(method) %>%
+    mutate(sums=sum(sums),
+           name=factor(name, levels = c("Processed datasets", "Labels recovered", 
+                                        "# Labels in Top 30", "# Labels in Top 10", 
+                                        "# Labels in Top 5", "ROC AUC", "PR AUC",
+                                        "Cum. Rank Dist. AUC")))
+}
+```
+
+
+```{r create_correlationsDf}
+# Create df containing all correlations between ranks and continous variables
+correlations.df <- correlationFCdiffG.df %>%
+  full_join(correlationRank.df, by=c("methods", "ranking")) %>%
+  full_join(correlationQC.df, by=c("methods", "ranking"))
+correlations.df <- correlations.df %>%
+  dplyr::select(methods, ranking) %>%
+  mutate(as.data.frame(apply(correlations.df[-(1:2)], 2, function(x) as.numeric(x)))) %>%
+  mutate_if(is.numeric, funs(. * -1))
+```
+
+
+```{r Fig_2}
+# Get overview of datasets that have been processed
+paper.info <- info %>%
+  dplyr::select(datasets, method, rankUnstr, rank) %>%
+  dplyr::rename('Processed datasets'=datasets, 'Labels recovered (relaxed)'=rankUnstr,
+                'Labels recovered (stringent)'=rank) %>%
+  arrange(-`Labels recovered (relaxed)`)
+paper.info <- paper.info %>%
+  mutate(method=factor(method, levels = unique(info$method)))
+
+# # Fig. 2A (Overview of datasets)
+# 
+# # Melt dataframe into long format for plotting
+# paper.infoMelted <- melt(paper.info, id="method")
+# 
+# paper.overview <- ggplot(data=paper.infoMelted, aes(group=variable, x=fct_reorder(method,
+#                          -value), y=value, fill=method, alpha=variable)) +
+#   geom_bar(stat="identity", position=position_dodge(), color="black") +
+#   guides(fill = FALSE) +
+#   theme_cowplot(font_size = fs) +
+#   scale_fill_manual(values=col[names(col) %in% paper.infoMelted$method]) +
+#   scale_alpha_manual(values=c(1, 0.6, 0.2),
+#                      labels = function(x) str_wrap(x, width = 20)) +
+#   labs(y="Count", alpha="", x="Method") +
+#   theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+
+## Fig. 2 (A, B)
+paper.hitters <- hitters.list$rank
+paper.hittersBars <- data.frame("Labels.recovered"=rowSums(paper.hitters >= 0),
+                      "30"=rowSums(paper.hitters <= 30 & paper.hitters >= 0),
+                      "10"=rowSums(paper.hitters <= 10 & paper.hitters >= 0),
+                      "5"=rowSums(paper.hitters <= 5 & paper.hitters >= 0)) %>%
+  mutate("NA"=84, .before = "Labels.recovered")
+paper.hittersBars$method <- rownames(paper.hittersBars)
+paper.hittersBars <- paper.hittersBars %>%
+  arrange(-`X30`) %>%
+  mutate(method=factor(method, levels = method)) %>%
+  full_join(paper.info %>%
+              dplyr::select(method, 'Processed datasets'), by="method") %>%
+  dplyr::select('NA', 'Processed datasets', everything())
+paper.hittersBarsMelted <- melt(paper.hittersBars, id="method")
+paper.hittersBarsMelted <- paper.hittersBarsMelted %>%
+  mutate(variable=gsub("X", "", variable),
+         variable = case_when(
+           variable == "Labels.recovered" ~ "Labels recovered",
+           variable != "Labels.recovered" ~ variable
+         ))
+
+
+paper.barplot <- ggplot(paper.hittersBarsMelted, aes(method, value, fill=variable, colours)) +
+  geom_bar(stat="identity", position = "identity", color="black") +
+  theme_cowplot(font_size = fs) +
+  guides(color = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  xlab("Method") + ylab("Count") + labs(fill="Threshold (stringent)") +
+  scale_fill_manual(values = c(pal_igv("default")("51")[1:4], "gray46", "white"),
+                    breaks=c('Labels recovered', '30', '10', '5', 'Processed datasets', 'NA'))
+
+paper.hitters <- hitters.list$rankUnstr
+paper.hittersBars <- data.frame("Labels.recovered"=rowSums(paper.hitters >= 0),
+                                "30"=rowSums(paper.hitters <= 30 & paper.hitters >= 0),
+                                "10"=rowSums(paper.hitters <= 10 & paper.hitters >= 0),
+                                "5"=rowSums(paper.hitters <= 5 & paper.hitters >= 0)) %>%
+  mutate("NA"=84, .before = "Labels.recovered")
+paper.hittersBars$method <- rownames(paper.hittersBars)
+paper.hittersBars <- paper.hittersBars %>%
+  arrange(-`X30`) %>%
+  mutate(method=factor(method, levels = method)) %>%
+  full_join(paper.info %>%
+              dplyr::select(method, 'Processed datasets'), by="method") %>%
+  dplyr::select('NA', 'Processed datasets', everything())
+paper.hittersBarsMelted <- melt(paper.hittersBars, id="method")
+paper.hittersBarsMelted <- paper.hittersBarsMelted %>%
+  mutate(variable=gsub("X", "", variable),
+         variable = case_when(
+           variable == "Labels.recovered" ~ "Labels recovered",
+           variable != "Labels.recovered" ~ variable
+         ))
+
+paper.barplotUnstr <- ggplot(paper.hittersBarsMelted, aes(method, value, fill=variable, colours)) +
+  geom_bar(stat="identity", position = "identity", color="black") +
+  theme_cowplot(font_size = fs) +
+  guides(color = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1)) +
+  xlab("Method") + ylab("Count") + labs(fill="Threshold (relaxed)") +
+  scale_fill_manual(values = c(pal_igv("default")("51")[1:4], "gray46", "white"),
+                    breaks=c('Labels recovered', '30', '10', '5', 'Processed datasets', 'NA'))
+
+
+# Fig. 2 (C, D)
+paper.aucDf <- roc_pr.list$rank %>%
+  dplyr::select(auc, prAuc, method) %>%
+  distinct() %>%
+  left_join(dist.list$rank %>%
+              dplyr::select(method, auc) %>%
+              distinct() %>%
+              dplyr::rename('Cum. Dist. AUC'=auc), by="method") %>%
+  arrange(-auc) %>%
+  dplyr::rename('ROC AUC'=auc, 'PR AUC'=prAuc) %>%
+  dplyr::select('PR AUC', everything())
+paper.aucDf <- paper.aucDf %>%
+  mutate(method=factor(method, levels = unique(paper.aucDf$method)))
+
+paper.aucDfMelted <- melt(paper.aucDf, id="method")
+
+paper.results <- ggplot(data=paper.aucDfMelted, aes(group=variable, x=method, y=value, fill=variable)) +
+  geom_bar(stat="identity", position=position_dodge(), color="black") +
+  theme_cowplot(font_size = fs) +
+  scale_fill_igv() +
+  labs(y="AUC", x="Method", fill="Metric (stringent)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+paper.aucDf <- roc_pr.list$rankUnstr %>%
+  dplyr::select(auc, prAuc, method) %>%
+  distinct() %>%
+  left_join(dist.list$rankUnstr %>%
+              dplyr::select(method, auc) %>%
+              distinct() %>%
+              dplyr::rename('Cum. Dist. AUC'=auc), by="method") %>%
+  arrange(-auc) %>%
+  dplyr::rename('ROC AUC'=auc, 'PR AUC'=prAuc) %>%
+  dplyr::select('PR AUC', everything())
+paper.aucDf <- paper.aucDf %>%
+  mutate(method=factor(method, levels = unique(paper.aucDf$method)))
+
+paper.aucDfMelted <- melt(paper.aucDf, id="method")
+
+paper.resultsUnstr <- ggplot(data=paper.aucDfMelted, aes(group=variable, x=method, y=value, fill=variable)) +
+  geom_bar(stat="identity", position=position_dodge(), color="black") +
+  theme_cowplot(font_size = fs) +
+  scale_fill_igv() +
+  labs(y="AUC", x="Method", fill="Metric (relaxed)") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+# Print plot
+paper <- plot_grid(paper.barplot, paper.barplotUnstr, paper.results, paper.resultsUnstr, ncol=2, nrow=2,
+                  align = "hv", labels = c("A", "B","C", "D"), label_x = -0.02, axis = "tblr")
+print(paper)
+
+# Save plot
+ggsave(paste0(output_path, "Fig_2.pdf"),
+       paper, device = "pdf", width = 18, height = 12, units = "cm")
+
+```
+
+
+```{r Fig_3_prep}
+# Get which of the experiments have a perturbed TF, that is also a super enhancer
+data.path <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/data/chipseq/'
+se.txts <- list.files(data.path, recursive = T, full.names = T,
+                      pattern = 'GENE_TABLE.txt')
+sectrl.txts <- se.txts[grep(se.txts, pattern = 'control')]
+
+se.df <- lapply(sectrl.txts, function(sectrl.txt) {
+  x <- read_tsv(sectrl.txt)
+  tibble(study = gsub('.*chipseq//|/data.*', '', sectrl.txt),
+         tf = gsub('H3K27ac_|_GENE.*', '', basename(sectrl.txt))) %>%
+    mutate(is_se = sum(grepl(x$GENE, pattern = tf, ignore.case = T)))
+})
+
+# Path to benchmark data
+se.df <- bind_rows(se.df) %>% mutate(is_se = is_se != 0)
+
+# Read in ranking results of all methods, as well as all their data characteristics
+#ranks.df <- read_rds('/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/benchmark_data/methods_overview.RDS')
+#ranks.df <- methods
+
+# Put all experiments with more than 2 replicates into one group 'Other' bc of to few
+# samples otherwise in these groups and add if TF is a super enhancer
+ranks.df <- methods %>%
+  mutate(rep = ifelse(rep > 2, '>=3', as.character(rep))) %>%
+  left_join(., se.df) %>%
+  mutate(is_se = ifelse(is.na(is_se), F, is_se))
+
+ranks.df <- ranks.df %>%
+  mutate(log2FoldChange = case_when(log2FoldChange < 2 ~ 'log2FC<=2',
+                                    log2FoldChange > 2 & log2FoldChange <= 6 ~ '2<log2FC<=6',
+                                    log2FoldChange >6 ~ 'log2FC>6',
+                                    is.na(log2FoldChange) ~ 'Others'),
+         numberDiffGenes = case_when(numberDiffGenes <= 100 ~ 'DiffGenes<=100',
+                                     numberDiffGenes > 100 & numberDiffGenes <=500 ~ '100<DiffGenes<=500',
+                                     numberDiffGenes > 500 & numberDiffGenes >=1000 ~ '500<DiffGenes<=1000',
+                                     numberDiffGenes > 1000 ~ 'DiffGenes>1000',
+                                     is.na(numberDiffGenes) ~ 'Others'))
+
+
+# Compute ICs per PWM
+pwm.list <- read_rds('~/public_data/motifs/lambert2018/lambert2018_pwmList.rds')
+pwm.ics <- sapply(pwm.list, function(pwm) {
+  mean(ggseqlogo:::computeBits(pwm@profileMatrix))
+})
+
+# Comput IC per TF
+tf.ics <- read_tsv('~/public_data/motifs/lambert2018/Human_TF_MotifList_v_1.01.txt') %>%
+  dplyr::select(gene_name = 2, motif_id = 7, motif_source = 6) %>%
+  mutate(motif_ic = pwm.ics[motif_id]) %>%
+  filter(!is.na(motif_ic)) %>%
+  group_by(gene_name) %>%
+  summarise(motif_ic = mean(motif_ic)) %>%
+  dplyr::rename(tf = gene_name) %>%
+  mutate(tf = ifelse(tf == 'ZNF296', 'ZFP296', tf))
+
+# Add missing IC per label
+tf.labels <- c('GATA3-JUN', 'BHLHE40-BHLHE41', 'MEF2A-MEF2D', 'TP53-TP16',
+               'PPARB-PPARG', 'NR3C1-NFKB', 'DLX1-DLX2')
+tf.ics <- lapply(1:length(tf.labels), function(ii) {
+  tf.ics %>%
+    filter(grepl(tf, pattern = gsub('-', '|', tf.labels[ii]))) %>% 
+    summarise(tf = tf.labels[ii], motif_ic = mean(motif_ic))
+}) %>% bind_rows %>% bind_rows(tf.ics, .)
+tf.ics <- tf.ics %>%
+  filter(grepl(tf, pattern = 'RXR')) %>% 
+  summarise(tf = 'RXR', motif_ic = mean(motif_ic)) %>%
+  bind_rows(tf.ics, .)
+
+# Add ICs to rank data.frame
+ranks.df <- ranks.df %>% left_join(., tf.ics) %>% 
+  mutate(motif_ic = ifelse(is.na(motif_ic), 0, motif_ic))
+
+
+
+# Define features of interest and check that they're present in the above df
+#'motifType'
+features.ofi <- c('type', 'rep', 'tf_family', 'NSC_mean', 'antibody', 'refGenome',
+                  'is_se', 'bio_sample', 'num_diff_peaks_th',
+                  'unique_mapped_reads_mean', 'RSC_mean', 'PBC_mean',
+                  'frip_mean', 'log2FoldChange', 'numberDiffGenes', 'motif_ic')
+features.ofi <- features.ofi[features.ofi %in% colnames(ranks.df)]
+
+
+# Get all information independant of tools into one df to later add on experiments
+# missing for tools bc experiment could not be processed or label hasn't been recovered
+ranks.full <- ranks.df %>%
+  dplyr::select(c(features.ofi, "dataset")) %>%
+  distinct() %>%
+  mutate(y=1) 
+
+# Function calculating for specified method Conditional permutation importance of
+# random forest
+model.randomForest <- function(meth.ofi) { #, r) {
+  # print(meth.ofi)
+
+  ranks.randomForest <- lapply(c('rank', 'rankUnstr'), function(r) {
+    # Subset per method, NA values to string and binarise the ranks of interest
+    ranks.subset <- as.data.frame(ranks.df[ranks.df$method == meth.ofi,]) %>%
+      mutate(motifType=ifelse(is.na(motifType), "NA", motifType),
+             motifType=gsub(' -.*', '', motifType))
+    ranks.subset$y <- ifelse(is.na(ranks.subset[, r]), 1, ranks.subset[, r])
+
+    # Add missing data
+    ranks.subset <- ranks.subset[, c(features.ofi, 'y', 'dataset')] %>%
+      bind_rows(ranks.full[!(ranks.full$dataset %in% ranks.subset$dataset),]) %>%
+      distinct() %>%
+      dplyr::select(-dataset) %>%
+      mutate(is_se=as.factor(as.integer(is_se)),
+             unique_mapped_reads_mean = log10(unique_mapped_reads_mean),
+             numberDiffGenes = ifelse(is.na(numberDiffGenes), 'Others', numberDiffGenes))
+
+    # Make groups no smaller than 5, otherwise called 'Others' and make all
+    # characters facotrs for cforest
+    ranks.randomForest <- lapply(features.ofi, function(x, df=ranks.subset){
+      temp <- df %>%
+        dplyr::select(!!as.symbol(x))
+
+      if(is.character(temp[, 1])) {
+        temp <- temp %>%
+          group_by(!!as.symbol(x)) %>%
+          dplyr::mutate(count=n(),
+                        tmp=ifelse(count < 5, "Others", !!as.symbol(x)),
+                        tmp=as.factor(tmp)) %>%
+          ungroup() %>%
+          dplyr::select(tmp) %>%
+          dplyr::rename(!!x:=tmp)
+      }
+
+      temp
+    }) %>% bind_cols() %>%
+      bind_cols(ranks.subset %>%
+                  dplyr::select(y))
+  }) %>% bind_rows
+
+  
+  folds <- create_folds(ranks.randomForest$y, k = 10)
+  
+  cv.folds <- lapply(names(folds), function(fold.name) {
+    # print(fold.name)
+    ii <- folds[[fold.name]]
+    # Fit model cforest
+    rf <- cforest(y ~ ., data = ranks.randomForest[ii,],
+                  control = cforest_unbiased(mtry = 2, ntree = 500))
+    
+    
+    
+    yy <- rf@predict_response(ranks.randomForest[-ii,])[,1]
+    rf.pcc <- cor(ranks.randomForest$y[-ii], yy)
+    feature.imps <- varimp(rf, conditional = T)
+    tibble(feature = names(feature.imps),
+           imp = feature.imps,
+           cv = fold.name,
+           pcc = rf.pcc,
+           meth = meth.ofi)
+    #return(rf.pcc)
+  })
+  
+  cv <- cv.folds %>%
+    bind_rows() %>%
+    group_by(cv) %>%
+    mutate(imp=abs(imp)/sum(abs(imp))) %>%
+    ungroup()
+  cv
+}
+
+# Apply above function for each tool
+imps.rds <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/feature_imps.rds'
+if(!file.exists(imps.rds)) {
+  feature.imps <- lapply(X=unique(ranks.df$method), FUN=model.randomForest) %>% bind_rows()
+  
+  
+  feature.imps <- feature.imps %>%
+    group_by(feature, meth) %>%
+    mutate(imp = mean(imp)) %>%
+    ungroup()
+  
+  write_rds(feature.imps, file = imps.rds)
+} else {
+  feature.imps <- read_rds(imps.rds)
+}
+
+# Correct methods+
+feature.imps <- feature.imps %>% 
+      mutate(meth = gsub('homer', 'HOMER', meth), 
+             meth = gsub('gimmeMotifs', 'GimmeMotifs', meth), 
+             meth = gsub('lola.*', 'LOLA', meth))
+
+
+# Function returning if point is outlier in boxplot
+is.outlier <- function(x) {
+  return(x < quantile(x, 0.25) - 1.5 * IQR(x) |
+         x > quantile(x, 0.75) + 1.5 * IQR(x))
+}
+```
+
+
+```{r Fig_3_A}
+# Get dataframe with pearson-correlation coefficients for each tool and fold
+feature.pcc <- feature.imps %>%
+  dplyr::select(meth, cv, pcc) %>%
+  distinct()
+
+# Prepare conditional feature importance
+feature.impsMean <- feature.imps %>%
+  group_by(feature, meth) %>%
+  mutate(imp = mean(imp)) %>%
+  dplyr::select(-c("cv", "pcc")) %>%
+  ungroup() %>%
+  distinct() %>%
+  group_by(feature) %>%
+  mutate(out_label = ifelse(is.outlier(imp), meth, NA),
+         colourGroup=ifelse(feature %in% c("type", "rep", "tf_family", "antibody", "refGenome", 
+                                      "is_se", "bio_sample", "num_diff_peaks_th"), pal_igv("default")("51")[3], NA),
+         colourGroup=ifelse(feature %in% c("NSC_mean", "unique_mapped_reads_mean", "RSC_mean", 
+                                        "PBC_mean", "frip_mean"), pal_igv("default")("51")[4], colourGroup),
+         colourGroup=ifelse(feature %in% c("log2FoldChange", "numberDiffGenes"), pal_igv("default")("51")[8], colourGroup),
+         med=median(imp)) %>%
+  dplyr::arrange(-med) 
+
+left.anno.df <-  dcast(feature.impsMean, meth ~ feature, value.var="imp")
+rownames(left.anno.df) <- left.anno.df[, 1]
+left.anno.df <- left.anno.df[-1]
+
+top.anno.df <-  dcast(feature.pcc, cv ~ meth, value.var="pcc")
+rownames(top.anno.df) <- top.anno.df[, 1]
+top.anno.df <- top.anno.df[-1]
+
+anno.col <- pull(feature.impsMean, colourGroup)
+names(anno.col) <- pull(feature.impsMean, feature)
+anno.col <- anno.col[unique(names(anno.col))]
+anno.col <- anno.col[names(left.anno.df)]
+
+left.anno <- rowAnnotation('Scaled importance' =anno_boxplot(left.anno.df,
+                                                     axis_param = list(direction="reverse", gp=gpar(fontsize=7)),
+                                                     gp = gpar(fill = anno.col),
+                                                     width = unit(3, "cm"), gap = unit(2, "mm")),
+                            annotation_name_gp= gpar(fontsize=7))
+
+top.anno <- columnAnnotation('PCC' =anno_boxplot(top.anno.df,
+                                                     axis_param = list(gp=gpar(fontsize=7)),
+                                                     gp = gpar(fill = col),
+                                                     width = unit(3, "cm"), gap = unit(2, "mm")),
+                            annotation_name_gp= gpar(fontsize=7))
+
+anno.legend <- Legend(labels = c("Experimental feature", "ChIP-seq QC", "RNA-seq feature"), 
+                      title = "Feature type", legend_gp = gpar(fill = unique(anno.col)),
+                      labels_gp = gpar(fontsize = 6), title_gp = gpar(fontsize=7, fontface="bold"))
+
+legend <- list(labels_gp = gpar(fontsize = 6))
+legend$title_gp = gpar(fontsize=7, fontface="bold")
+
+row.labels <- c("type"="Perturbation type", "rep"="# Replicates", 
+                "tf_family"="TF family", "antibody"="Antibody type", 
+                "refGenome"="Reference genome", "is_se"="Is SE", 
+                "bio_sample"="Biological sample", "num_diff_peaks_th"="# Differential peaks", 
+                "NSC_mean"="NSC", "unique_mapped_reads_mean"="Uniquely mapped reads", 
+                "RSC_mean"="RSC", "PBC_mean"="PBC", "frip_mean"="FRIP", 
+                "log2FoldChange"="Log2 FC", "numberDiffGenes"="# Differential genes",
+                'motif_ic' = 'Motif IC')
+
+paper.heatmapImps <- Heatmap(t(left.anno.df),
+                            show_row_names = T,
+                            show_column_names = T,
+                            show_column_dend = FALSE,
+                            show_row_dend = FALSE,
+                            left_annotation = left.anno,
+                            top_annotation = top.anno,
+                            name = 'Scaled importance',
+                            col = viridis(n=5),
+                            row_names_gp = gpar(fontsize = 6),
+                            column_names_gp = gpar(fontsize = 6),
+                            heatmap_legend_param = legend,
+                            row_order = feature.impsMean %>% 
+                              pull(feature) %>% 
+                              unique(),
+                            row_labels = row.labels[colnames(left.anno.df)],
+                            column_title ="Method",
+                            column_title_side = "bottom",
+                            column_title_gp = gpar(fontsize = 7)
+)
+
+draw(paper.heatmapImps, annotation_legend_list = anno.legend)
+
+# Save figure
+pdf(file=paste0(output_path, "Fig_3_A.pdf"), width = 6.5, height = 3.5)
+draw(paper.heatmapImps, annotation_legend_list = anno.legend)
+dev.off()
+```
+
+
+```{r Fig_3_BC}
+# Function that creates df with number of top30 labels for a specific group and ranking
+hittersByType <- function(r, group){
+  hitters.grouped <- melt(hitters.list[[r]]) %>%
+  dplyr::rename(method=Var1, dataset=Var2, rank=value) %>%
+  left_join(methods %>% 
+              dplyr::select(dataset, !!group) %>%
+              dplyr::rename(grouping=!!as.symbol(group)), by="dataset") %>%
+  distinct() %>%
+  mutate(hitter=ifelse(rank<=30 & rank>=0, TRUE, FALSE)) %>%
+  group_by(grouping) %>%
+  mutate(total=n(),
+         total=total/13) %>%
+  ungroup() %>%
+  mutate(grouping=ifelse(total<=5, "Other", grouping)) %>%
+  distinct() %>%
+  group_by(grouping) %>%
+  mutate(total=n(),
+         total=total/13) %>%
+  ungroup() %>%
+  group_by(grouping, method) %>%
+  summarise(hitters=sum(hitter),
+            total=total) %>%
+  ungroup() %>%
+  distinct() %>%
+  mutate(hitters=hitters/total,
+         ranking=r,
+         grouping=paste0(grouping, "\n(n=", total, ")")) %>%
+  group_by(grouping) %>%
+  mutate(method=as.character(method),
+         out_label = ifelse((min(hitters)==hitters & sum(min(hitters)==hitters)<=3) | 
+                            (max(hitters)==hitters & sum(max(hitters)==hitters)<=3), method, NA)) %>%
+ #        out_label = ifelse(is.outlier(hitters), method, NA)) %>%
+  ungroup() %>%
+  dplyr::rename(!!group:=grouping) 
+  
+  hitters.grouped
+}
+
+# Df with top30 for stringent and tf family
+hitters.tfFamilyStr <- hittersByType("rank", "tf_family") %>%
+  group_by(tf_family) %>%
+  mutate(mean=mean(hitters)) %>%
+  arrange(-mean)  %>%
+  ungroup() %>%
+  dplyr::select(-mean) %>%
+  mutate(tf_family=gsub("Nuclear receptor", "Nuclear \nreceptor", tf_family))
+hitters.tfFamilyStr <- hitters.tfFamilyStr %>%
+  mutate(tf_family=factor(tf_family, levels=unique(hitters.tfFamilyStr$tf_family)))
+
+# # Df with top30 for unstringent and tf family
+# hitters.tfFamilyUnstr <- hittersByType("rankUnstr", "tf_family") 
+# 
+# # Combine tf family dfs
+# hitters.tfFamily <- hitters.tfFamilyStr %>%
+#   bind_rows(hitters.tfFamilyUnstr) %>%
+#   mutate(ranking=ifelse(ranking=="rank", "Stringent", "Unstringent"),
+#          tf_family=gsub("Nuclear receptor", "Nuclear \nreceptor", tf_family),
+#          tf_family=factor(tf_family, levels=unique(hitters.tfFamilyStr$tf_family)))
+
+# Df with top30 for stringent and perturbation type
+hitters.typeStr <- hittersByType("rank", "type") %>%
+  group_by(type) %>%
+  mutate(mean=mean(hitters)) %>%
+  arrange(-mean)  %>%
+  ungroup() %>%
+  dplyr::select(-mean) 
+hitters.typeStr <- hitters.typeStr %>%
+  mutate(type=factor(type, levels=unique(hitters.typeStr$type)))
+
+# # Df with top30 for unstringent and pertrubation type
+# hitters.typeUnstr <- hittersByType("rankUnstr", "type") 
+# 
+# # Combine pertrubation type dfs
+# hitters.type <- hitters.typeStr %>%
+#   bind_rows(hitters.typeUnstr) %>%
+#   mutate(ranking=ifelse(ranking=="rank", "Stringent", "Unstringent"),
+#          type=factor(type, levels=unique(hitters.typeStr$type)))
+
+# Prepare TF cols for boxplot
+tf.cols <- ggsci::pal_d3(palette = 'category20')(length(unique(overview.df$tf_family)))
+names(tf.cols) <- unique(overview.df$tf_family)
+tf.cols <- sapply(unique(hitters.tfFamilyStr$tf_family), function(x) {
+  tf.cols[grep(names(tf.cols), pattern = gsub('\n.*', '', x))][1]
+})
+names(tf.cols) <- unique(hitters.tfFamilyStr$tf_family)
+tf.cols[is.na(tf.cols)] <- 'grey'
+
+# Plot boxplot of top30 for tf family
+paper.tf_family <- ggplot(hitters.tfFamilyStr, aes(tf_family, hitters, fill = tf_family)) +
+  geom_boxplot(outlier.shape = NA,  width = 0.4) +
+  geom_jitter(width = 0.15, size = 1, aes(col = out_label)) +
+  scale_fill_manual(values = tf.cols) + scale_color_manual(values = col) +
+  theme_cowplot(font_size = fs) + labs(x = "TF family", y = "# Top 30") +
+  geom_text_repel(data = filter(hitters.tfFamilyStr, !is.na(out_label)), 
+                  aes(label = out_label), size = fs*0.36, seed = 13, verbose = T,
+                  max.time = 1, max.iter = Inf) + 
+  theme(legend.position = "none")  
+
+# Define perturbation types
+expType.cols <- ggsci::pal_npg()(5)
+names(expType.cols) <- sort(unique(overview.df$type)) 
+expType.cols <- sapply(unique(hitters.typeStr$type), function(x) {
+  expType.cols[grep(names(expType.cols), pattern = gsub('\n.*', '', x))][1]
+})
+names(expType.cols) <- unique(hitters.typeStr$type) 
+
+# Plot boxplot of top30 for perturbation type
+paper.type <- ggplot(hitters.typeStr, aes(type, hitters, fill = type)) +
+  geom_boxplot(outlier.shape = NA, width = 0.4) +
+  geom_jitter(width = 0.15, size = 1, aes(col = out_label)) +
+  theme_cowplot(font_size = fs) +
+  scale_fill_manual(values = expType.cols) + scale_color_manual(values = col) +
+  labs(x = "Perturbation type", y = "# Top 30") +
+  geom_text_repel(data = filter(hitters.typeStr, !is.na(out_label)), 
+                  aes(label = out_label), size = fs*0.36, seed = 13, verbose = T,
+                  max.time = 1, max.iter = Inf) + 
+  theme(legend.position = "none")
+
+# Print plot
+paper.indPerformances <- plot_grid(paper.tf_family, paper.type, ncol=1, nrow=2, 
+                                   labels = c("B", "C"), align = "hv", 
+                                   axis = "tblr", label_x = -0.02)
+
+# Print plot
+print(paper.indPerformances)
+
+# Save plot
+ggsave(paste0(output_path, "Fig_3_BC.pdf"),
+       paper.indPerformances, device = "pdf", width = 18, height = 9, units = "cm")
+```
+
+
+```{r Fig_4}
+## Fig. 4 (A)
+colBubble <- c("#4575b4", "#FFD147FF", "#d73027")
+names(colBubble) <- c("good", "intermediate", "poor")
+
+# Prepare method order
+rank_var <- "rank"
+tmp.order <- bubble.list[[rank_var]] %>% 
+  dplyr::select(method, sums) %>%  unique() %>%
+  column_to_rownames('method') 
+meth.order <- tmp.order$sums
+names(meth.order) <- rownames(tmp.order)
+meth.order <- names(meth.order)[order(meth.order)]
+
+
+paper.bubbleStr <- bubble.list[[rank_var]] %>%
+  mutate(method = factor(method, levels = meth.order)) %>%
+  ggplot(aes(name, method)) +
+  geom_point(size = 4, aes(fill=value, colour=value)) +
+  guides(size="none", fill="none") +
+  scale_fill_manual(values=colBubble) +
+  scale_color_manual(values=colBubble) +
+  theme_cowplot(fs) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        panel.grid = element_line(color = "lightgrey",
+                                  size = 0.5,
+                                  linetype = 1),
+        axis.line=element_blank(),
+        axis.ticks=element_blank()) +
+  labs(x="Metric", y="Method", colour="Performance", title = "Stringent")
+
+# Fig. 4 (B)
+rank_var <- "rankUnstr"
+
+paper.bubbleUnstr <-  bubble.list[[rank_var]] %>%
+  mutate(method = factor(method, levels = meth.order)) %>%
+  ggplot(aes(name, method)) +
+  geom_point(size = 4, aes(fill=value, colour=value)) +
+  guides(size="none", fill="none") +
+  scale_fill_manual(values=colBubble) +
+  scale_color_manual(values=colBubble) +
+  theme_cowplot(fs) +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        panel.grid = element_line(color = "lightgrey",
+                                  size = 0.5,
+                                  linetype = 1),
+        axis.line=element_blank(),
+        axis.ticks=element_blank()) +
+  labs(x="Metric", y="Method", colour="Performance", title = "Relaxed")
+
+# Print plot
+paper.bubble <-  ggarrange(paper.bubbleStr, paper.bubbleUnstr, ncol=2, nrow=1, align = "hv",
+                          common.legend = TRUE, labels = c("A", "B"), legend = "right")
+
+# Save plot
+ggsave(paste0(output_path, "Fig_4.pdf"),
+       paper.bubble, device = "pdf", width = 18, height = 8, units = "cm")
+```
+
+
+```{r Supp_fig_1_ABCD}
+## Supp. Fig. 1 (A, B, C, D)
+paper.overview1 <- ggplot(overview.df %>%
+                            mutate(type=ifelse(type=="antagonist", "ant-\nagonist", type),
+                                   type=ifelse(type=="agonist", "agon-\nist", type)), 
+                          aes(x = reorder(type, type, function(x)-length(x)), fill = type)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) + scale_fill_npg() +
+  xlab("Experiment type") + ylab("Count") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 1))
+expType.cols <- ggsci::pal_npg()(5)
+names(expType.cols) <- sort(unique(overview.df$type)) 
+
+tf.cols <- ggsci::pal_d3(palette = 'category20')(length(unique(overview.df$tf_family)))
+names(tf.cols) <- unique(overview.df$tf_family)
+paper.overview2 <- ggplot(overview.df, aes(x = reorder(tf_family, tf_family, function(x)length(x)), fill = tf_family)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) + coord_flip() +
+  scale_fill_manual(values = tf.cols) +
+  xlab("TF family") + ylab("Count")
+
+paper.overview3 <- ggplot(overview.df, aes(x = reorder(rep, rep, function(x)-length(x)), fill = rep)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) + scale_fill_viridis_d() + 
+  xlab("# Replicates") + ylab("Count")
+rep.cols <- viridis::viridis_pal()(5)
+names(rep.cols) <- as.character(1:5)
+
+paper.overview4 <- ggplot(overview.df, aes(x = reorder(antibody, antibody, function(x)length(x)), fill = antibody)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) +
+  scale_fill_manual(values = c('#de2d26', '#2ca25f', '#3182bd', 'grey')) +
+  coord_flip() +
+  ylab("Count") + xlab("Antibody type") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 9))
+ab.cols <-  c('#de2d26', '#2ca25f', '#3182bd', 'grey')
+names(ab.cols) <- sort(unique(overview.df$antibody))
+
+paper.overview5 <- ggplot(overview.df, aes(x = reorder(bio_sample, bio_sample, function(x)-length(x)), fill = bio_sample)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) +
+  scale_fill_igv() +
+  ylab("Count") + xlab("Biological sample type") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 9))
+bst.cols <- ggsci::pal_igv()(3)
+names(bst.cols) <- unique(overview.df$bio_sample)
+
+ref.cols <- c('hg38' = '#5ab4ac','mm10' = '#d8b365')
+paper.overview6 <- ggplot(overview.df, aes(x = reorder(refGenome, refGenome, function(x)-length(x)), fill = refGenome)) +
+  geom_bar(show.legend = FALSE, colour="black") +
+  theme_cowplot(fs) +
+  scale_fill_manual(values = ref.cols) +
+  ylab("Count") + xlab("Reference genome") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 9))
+
+
+# Print plot
+paper <- plot_grid(paper.overview1, paper.overview4, paper.overview5, paper.overview2,
+                  ncol=2, nrow=2, align = "hv", axis="l", rel_widths = c(1, 1),
+                  rel_heights = c(1, 1), labels = c("A", "B", "C", "D"))
+print(paper)
+
+# Save plot
+ggsave(paste0(output_path, "Supp_fig_1_ABCD.pdf"), paper, device = "pdf", width = 15, 
+       height = 11, units = "cm")
+```
+
+
+```{r Supp_fig_1_E}
+# Prepare data
+groups <- methods %>% 
+  dplyr::select(dataset, antibody, type, tf_family, bio_sample, rep, refGenome) %>% 
+  distinct() %>% 
+  dplyr::select(-dataset) %>%
+  mutate(rep=ifelse(rep<3, as.character(rep), ">3")) %>%
+  mutate_all(funs(str_wrap(., width = 13))) %>%
+  dplyr::rename(Antibody=antibody, 'Perturbation type'=type, 'TF family'=tf_family, 
+                'Bio. sample'=bio_sample, '# Replicates'=rep, 'Ref. genome'=refGenome)
+
+groups.names <- unique(unlist(groups))
+groups.names <- groups.names[! groups.names %in% c(NA)]
+groups.matrix <- matrix(nrow=length(groups.names), ncol=length(groups.names))
+rownames(groups.matrix) <- groups.names
+colnames(groups.matrix) <- groups.names
+
+for(i in groups.names) {
+  for(j in groups.names) {
+    groups.matrix[i, j] <- sum(rowSums(groups==i | groups==j) == 2, na.rm = T)
+  }
+}
+
+# Colours
+#grid_colours <- c(pal_igv("default")("51")[1:30], pal_igv("default")("51")[37:39], pal_igv("default")("51")[42:43])
+grid_colours <- c(ab.cols, expType.cols, expType.cols, tf.cols, bst.cols, rep.cols[1:3], ref.cols) 
+#names(grid_colours) <- rownames(groups.matrix)
+names(grid_colours)[!(names(grid_colours) %in% rownames(groups.matrix))] <- names(grid_colours)[!(names(grid_colours) %in% rownames(groups.matrix))] %>%
+  gsub(' ', '\n', .) %>% gsub('\nM', ' M', .) %>%
+  gsub('^3$', '>3', .)
+grid_colours <- grid_colours[names(grid_colours) %in% rownames(groups.matrix)]
+
+col_mat <- groups.matrix
+for (i in 1:length(rownames(groups.matrix))) {
+  col_mat[i, groups.matrix[i, ] < 10] <- adjustcolor(grid_colours[i], alpha.f = 1/50)
+  col_mat[i, groups.matrix[i, ] < 5] <- adjustcolor(grid_colours[i], alpha.f = 10/30)
+  col_mat[i, groups.matrix[i, ] >= 10] <- adjustcolor(grid_colours[i], alpha.f = 1)
+}
+
+lgd_grouping = Legend(labels = names(groups), type = "point", 
+    background = pal_igv("default")("51")[45:51], 
+    title = "Experimental features", labels_gp = gpar(fontsize = 6), 
+    title_gp = gpar(fontsize=7, fontface="bold"))
+
+# Function that creates chorddiagram
+plot.chordDiagram <- function(){
+  circos.clear()
+  plot.new()
+  circle_size = unit(1, "snpc") 
+  
+  pushViewport(viewport(x = 0, y = 0.5, width = circle_size, height = circle_size,    
+                        just = c("left", "center")))
+  par(omi = gridOMI(), new = TRUE)
+  
+  circos.par("gap.degree" = rep(6, nrow(groups.matrix)),
+             track.margin = c(0.01, 0.01),
+             track.height = 0.05,
+             circle.margin=c(0.5, 0.4, 0.3, 0.1))
+  chordDiagram(groups.matrix, col=col_mat, symmetric = TRUE,
+               preAllocateTracks = 2, annotationTrack = "grid", grid.col = grid_colours)
+  
+  circos.track(track.index = 1, panel.fun = function(x, y) {
+    circos.text(CELL_META$xcenter, CELL_META$ylim[1], CELL_META$sector.index,
+                facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5), cex = 0.5)
+  }, bg.border = NA, track.height = 0.6)
+  
+  i <- 0
+  for(grouping in names(groups)) {
+    model = pull(groups, !!grouping)
+    highlight.sector(sector.index = model, track.index = 2, col = pal_igv("default")("51")[45+i], 
+                     text = "", niceFacing = TRUE, facing = "bending.inside",
+                     text.vjust = 0.5, cex = 0.6)
+    i <- i+1
+  }
+  
+  upViewport()
+  
+  draw(lgd_grouping, x = circle_size, just = "left")
+
+}
+
+# Plot chorddiagram
+plot.chordDiagram()
+
+# Supp. Fig. 1 (E)
+pdf(paste0(output_path, "Supp_fig_1_E.pdf"),  width = 7, height = 4) #, pointsize = 6) 
+plot.chordDiagram()
+dev.off()
+```
+
+
+```{r Supp_fig_2}
+# Sup. Fig. 2
+graph <- DiagrammeR::grViz("digraph {
+
+graph [layout = dot]
+
+# Define the global styles of the nodes. We can override these in box if we wish
+node [shape = rectangle, fontname=Helvetica, fontsize=6]
+
+head [label =  ' ', shape=point, fillcolor=white, color=white, height=0, width=0]
+
+refLibrary1 [label = 'Motif Reference \nLibrary']
+refLibrary2 [label = 'ChIP-seq Reference \nLibrary']
+
+approach1A [label =  'Regression']
+approach1B [label =  'Enrichment']
+approach1C [label =  'Graph']
+approach1D [label =  'Ensemble']
+
+approach2A [label =  'Enrichment']
+
+score1A [label =  'AUC']
+score1B [label =  'Fisher`s Score']
+
+score2A [label =  'AUC']
+score2B [label =  'Fisher`s Score']
+
+MEIRLOP [label =  'MEIRLOP', shape='oval', fontname='Helvetica-Bold']
+monaLisa [label =  'monaLisa', shape='oval', fontname='Helvetica-Bold']
+RcisTarget [label =  'RcisTarget', shape='oval', fontname='Helvetica-Bold']
+TFEA [label =  'TFEA', shape='oval', fontname='Helvetica-Bold']
+homer [label =  'homer', shape='oval', fontname='Helvetica-Bold']
+CRCmapper [label =  'CRCmapper', shape='oval', fontname='Helvetica-Bold']
+gimmeMotifs [label =  'gimmeMotifs', shape='oval', fontname='Helvetica-Bold']
+BART [label =  'BART', shape='oval', fontname='Helvetica-Bold']
+LOLA [label =  'LOLA', shape='oval', fontname='Helvetica-Bold']
+
+
+# Edge definitions with the node IDs
+head -> {refLibrary1 refLibrary2}
+
+refLibrary1 -> {approach1A approach1B approach1C approach1D}
+approach1B -> {score1A score1B}
+approach1A -> {MEIRLOP monaLisa}
+score1A -> {RcisTarget TFEA}
+score1B -> homer
+approach1C -> CRCmapper
+approach1D -> gimmeMotifs
+
+refLibrary2 -> {approach2A}
+approach2A -> {score2A score2B}
+score2A -> BART
+score2B -> LOLA
+
+}")
+
+# Export graph
+graph %>%
+  export_svg() %>%
+  charToRaw %>%
+  rsvg_pdf(paste0(output_path, "Supp_fig_2.pdf"), width=500, height=220)
+```
+
+
+```{r Supp_fig_3}
+# Set label recovery scheme of interest / rank name
+rank_var <- "rank"
+
+# Supp. Fig. (A, B, C)
+paper.roc <- ggplot(roc_pr.list[[rank_var]] %>%
+                      filter(method!="CREMA" & method!="ISMARA"),
+                    aes(spec, sens, colour=method)) +
+  geom_path() +
+  scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+  geom_abline(col = 'red', linetype = 'dashed') +
+  theme_cowplot(font_size = fs) +
+  guides(color = guide_legend(nrow = 2, bycol = TRUE)) +
+  labs(x="Specificity", y="Sensitivity")
+
+paper.pr <- ggplot(roc_pr.list[[rank_var]] %>%
+                     filter(method!="CREMA" & method!="ISMARA"),
+                   aes(rec, prec, colour=method)) +
+  geom_path() +
+  scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+  geom_hline(yintercept=0.5, col = 'red', linetype = 'dashed') +
+  theme_cowplot(font_size = fs) +
+  guides(color = guide_legend(nrow = 2, bycol = TRUE)) +
+  labs(x="Recall", y="Precision")
+
+paper.cumDist <- ggplot(dist.list[[rank_var]] %>%
+                          filter(method!="CREMA" & method!="ISMARA"),
+                        aes(x, y, colour=method)) +
+  geom_path() +
+  scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+  geom_hline(yintercept=0, col = 'red', linetype = 'dashed') +
+  theme_cowplot(font_size = fs) +
+  guides(color = guide_legend(nrow = 2, bycol = TRUE)) +
+  labs(x="Rank", y="D(r)-r")
+
+# Supp. Fig. 3 (D, E)
+paper.aucDf <- roc_pr.list$rankUnstr %>%
+  dplyr::select(auc, prAuc, method) %>%
+  distinct() %>%
+  dplyr::rename(unstr_auc=auc,
+                unstr_prAuc=prAuc) %>%
+  full_join(roc_pr.list$rank %>%
+              dplyr::select(auc, prAuc, method) %>%
+              distinct(), by="method") %>%
+  filter(method!="CREMA" & method!="ISMARA")
+
+# paper.aucStr <- ggplot(paper.aucDf, aes(auc, prAuc, colour=method, label=method)) +
+#   geom_point(show.legend = FALSE) +
+#   scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+#   theme_cowplot(font_size = fs) +
+#   labs(x="ROC AUC (stringent)", y="PR AUC (stringent)") +
+#   geom_text_repel(colour="black", box.padding = 0.4, min.segment.length = 0.3,
+#                   seed=11, max.overlaps = Inf, size = fs*0.36)
+#
+# paper.aucUnstr <- ggplot(paper.aucDf, aes(unstr_auc, unstr_prAuc, colour=method, label=method)) +
+#   geom_point(show.legend = FALSE) +
+#   scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+#   theme_cowplot(font_size = fs) +
+#   labs(x="ROC AUC (unstringent)", y="PR AUC (unstringent)") +
+#   geom_text_repel(colour="black", box.padding = 0.4, min.segment.length = 0.3,
+#                   seed=11, max.overlaps = Inf, size = fs*0.36)
+
+paper.rocAuc <- ggplot(paper.aucDf, aes(auc, unstr_auc, colour=method, label=method)) +
+  geom_point(show.legend = FALSE) +
+  scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+  theme_cowplot(font_size = fs) +
+  labs(x="ROC AUC (stringent)", y="ROC AUC (relaxed)") +
+  geom_text_repel(colour="black", box.padding = 0.4, min.segment.length = 0.3,
+                  seed=11, max.overlaps = Inf, size = fs*0.36)
+
+paper.prAuc <- ggplot(paper.aucDf, aes(prAuc, unstr_prAuc, colour=method, label=method)) +
+  geom_point(show.legend = FALSE) +
+  scale_color_manual(name="Method", values=col[names(col) %in% paper.aucDf$method]) +
+  theme_cowplot(font_size = fs) +
+  labs(x="PR AUC (stringent)", y="PR AUC (relaxed)") +
+  geom_text_repel(colour="black", box.padding = 0.4, min.segment.length = 0.3,
+                  seed=11, max.overlaps = Inf, size = fs*0.36) +
+  theme(plot.margin = margin(t = 1,  # Top margin
+                             r = 1,  # Right margin
+                             b = 17,  # Bottom margin
+                             l = 1))
+
+# Print plot
+paper <- ggarrange(paper.cumDist, paper.roc, paper.pr, paper.rocAuc, paper.prAuc, ncol=2, nrow=3, common.legend =
+                    TRUE, align = "hv", legend = "bottom", labels = c("A", "B", "C", "D", "E"), label.x = -0.02)
+print(paper)
+
+# Save plot
+ggsave(paste0(output_path, "Supp_fig_3.pdf"),
+       paper, device = "pdf", width = 18, height = 18, units = "cm")
+```
+
+
+```{r Supp_fig_4}
+## Sup. Fig. 4
+# First "stringent" label recovery
+# Get data for heatmap plot
+paper.heatmap <- heatmapCategorized.list$rank
+paper.hittersAnnot <- hitters.list$rank
+
+# Prepare heatmap annotation by creating barplots
+left.anno.df <- rowSums(paper.hittersAnnot <= 30 & paper.hittersAnnot >= 0)
+top.anno.df <- colSums(paper.hittersAnnot <= 30 & paper.hittersAnnot >= 0)
+
+# Prepare TF annotation
+tf.anno <- methods %>% 
+  mutate(study = paste(study, label, sep = '_')) %>%
+  dplyr::select(study, tf_family) %>% 
+  unique() %>% group_by(tf_family) %>%
+  mutate(n = n(),
+         tf_family = ifelse(n > 3, tf_family, 'other')) %>%
+  arrange(tf_family) %>%
+  as.data.frame()
+rownames(tf.anno) <- tf.anno$study
+tf.cols <- c(tf.cols, c('other' = 'grey'))
+
+top.anno = HeatmapAnnotation('# Labels in top \n30 per dataset' = anno_barplot(top.anno.df,
+                                                                gp = gpar(fill = "#DC143C"),
+                                                                height = unit(2, "cm"), axis_param=list(gp=gpar(fontsize=7)), gap = unit(2, "mm")),
+                             'TF family' = tf.anno[names(top.anno.df),2],
+                             annotation_name_gp= gpar(fontsize=7),
+                             col = list('TF family' = tf.cols),
+                             annotation_legend_param = list(labels_gp = gpar(fontsize = 6), 
+                                                            title_gp = gpar(fontsize=7, fontface="bold"),
+                                                            legend_height = unit(4, "cm")))
+left.anno = rowAnnotation('# Labels in top \n30 per method' = anno_barplot(left.anno.df,
+                                                             axis_param = list(direction="reverse", gp=gpar(fontsize=7)),
+                                                             gp = gpar(fill = "#DC143C"),
+                                                             width = unit(2, "cm"), gap = unit(2, "mm")),
+                          annotation_name_gp= gpar(fontsize=7))
+
+
+legend <- list(labels_gp = gpar(fontsize = 6),
+               at = c(-1, seq(1:4)),
+               labels = c("NA", "<=5", "<=10", "<=30", ">30"),
+               legend_height = unit(4, "cm"))
+colFun <- c("grey77", pal_igv("default")(51)[34], pal_igv("default")(51)[3],
+            pal_igv("default")(51)[5], pal_igv("default")(51)[17])
+names(colFun) <- c(-1, 1:4)
+legend$title_gp = gpar(fontsize=7, fontface="bold")
+
+paper.heatmapStr <- Heatmap(paper.heatmap,
+                            show_row_names = T,
+                            show_column_names = F,
+                            show_column_dend = TRUE,
+                            show_row_dend = FALSE,
+                            top_annotation = top.anno,
+                            left_annotation =left.anno,
+                            name = 'Rank (stringent)',
+                            col = colFun,
+                            row_names_max_width = max_text_width(
+                              unique(methods$method),
+                              gp = gpar(fontsize = 6)
+                            ),
+                            row_names_gp = gpar(fontsize = 6),
+                            column_names_gp = gpar(fontsize = 6),
+                            heatmap_legend_param = legend,
+                            row_order = names(sort(left.anno.df)),
+                            clustering_method_columns = "ward.D2",
+                            clustering_method_rows = "ward.D2",
+                            row_dend_reorder = TRUE,
+                            column_dend_reorder = TRUE,
+                            column_title ="Dataset",
+                            column_title_side = "bottom",
+                            column_title_gp = gpar(fontsize = 7))
+
+paper.heatmapStr2 <- Heatmap(paper.heatmap,
+                            show_row_names = T,
+                            show_column_names = F,
+                            top_annotation = top.anno,
+                            left_annotation =left.anno,
+                            name = 'Rank (stringent)',
+                            col = colFun,
+                            row_names_max_width = max_text_width(
+                              unique(methods$method),
+                              gp = gpar(fontsize = 6)
+                            ),
+                            row_names_gp = gpar(fontsize = 6),
+                            column_names_gp = gpar(fontsize = 6),
+                            heatmap_legend_param = legend,
+                            column_order = names(sort(top.anno.df)),
+                            row_order = names(sort(left.anno.df)),
+                            cluster_columns = F, cluster_rows = F,
+                            column_title ="Dataset",
+                            column_title_side = "bottom",
+                            column_title_gp = gpar(fontsize = 7))
+
+# First "unstringent" label recovery
+# Get data for heatmap plot
+paper.heatmap <- heatmapCategorized.list$rankUnstr
+paper.hittersAnnot <- hitters.list$rankUnstr
+
+# Prepare heatmap annotation by creating barplots
+left.anno.df <- rowSums(paper.hittersAnnot <= 30 & paper.hittersAnnot >= 0)
+top.anno.df <- colSums(paper.hittersAnnot <= 30 & paper.hittersAnnot >= 0)
+
+top.anno = HeatmapAnnotation('# Labels in top \n30 per dataset' = anno_barplot(top.anno.df,
+                                                                gp = gpar(fill = "#DC143C"),
+                                                                height = unit(2, "cm"), axis_param=list(gp=gpar(fontsize=7)), gap = unit(2, "mm")),
+                             'TF family' = tf.anno[names(top.anno.df),2],
+                             annotation_name_gp= gpar(fontsize=7),
+                             col = list('TF family' = tf.cols),
+                             annotation_legend_param = list(labels_gp = gpar(fontsize = 6), 
+                                                            title_gp = gpar(fontsize=7, fontface="bold"),
+                                                            legend_height = unit(4, "cm")))
+left.anno = rowAnnotation('# Labels in top \n30 per method' = anno_barplot(left.anno.df,
+                                                                           axis_param = list(direction="reverse", gp=gpar(fontsize=7)),
+                                                                           gp = gpar(fill = "#DC143C"),
+                                                                           width = unit(2, "cm"), gap = unit(2, "mm")),
+                          annotation_name_gp= gpar(fontsize=7))
+
+paper.heatmapUnstr <- Heatmap(paper.heatmap,
+                              show_row_names = T,
+                              show_column_names = F,
+                              show_column_dend = TRUE,
+                              show_row_dend = FALSE,
+                              top_annotation = top.anno,
+                              left_annotation =left.anno,
+                              name = 'Rank (relaxed)',
+                              col = colFun,
+                              row_names_max_width = max_text_width(
+                                unique(methods$method),
+                                gp = gpar(fontsize = 6)
+                              ),
+                              row_names_gp = gpar(fontsize = 6),
+                              column_names_gp = gpar(fontsize = 6),
+                              heatmap_legend_param = legend,
+                              row_order = names(sort(left.anno.df)),
+                              clustering_method_columns = "ward.D2",
+                              clustering_method_rows = "ward.D2",
+                              row_dend_reorder = TRUE,
+                              column_dend_reorder = TRUE,
+                              column_title ="Dataset",
+                              column_title_side = "bottom",
+                              column_title_gp = gpar(fontsize = 7))
+
+paper.heatmapUnstr2 <- Heatmap(paper.heatmap,
+                              show_row_names = T,
+                              show_column_names = F,
+                              show_column_dend = TRUE,
+                              show_row_dend = FALSE,
+                              top_annotation = top.anno,
+                              left_annotation =left.anno,
+                              name = 'Rank (relaxed)',
+                              col = colFun,
+                              row_names_max_width = max_text_width(
+                                unique(methods$method),
+                                gp = gpar(fontsize = 6)
+                              ),
+                              row_names_gp = gpar(fontsize = 6),
+                              column_names_gp = gpar(fontsize = 6),
+                              heatmap_legend_param = legend,
+                              row_order = names(sort(left.anno.df)),
+                              column_order = names(sort(top.anno.df)),
+                              cluster_rows = F, cluster_columns = F,
+                              row_dend_reorder = TRUE,
+                              column_dend_reorder = TRUE,
+                              column_title ="Dataset",
+                              column_title_side = "bottom",
+                              column_title_gp = gpar(fontsize = 7))
+
+# Print plot
+paper <- paper.heatmapStr %v% paper.heatmapUnstr
+draw(paper, ht_gap = unit(2, "cm"))
+
+
+# Save figure
+pdf(file=paste0(output_path, "Supp_fig_4.pdf"), width = 7, height = 8.2)
+draw(paper, ht_gap = unit(2, "cm"))
+dev.off()
+
+
+# Print plot
+paper2 <- paper.heatmapStr2 %v% paper.heatmapUnstr2
+draw(paper2, ht_gap = unit(2, "cm"))
+
+
+# Save figure
+pdf(file=paste0(output_path, "Supp_fig_4_2.pdf"), width = 7, height = 8.2)
+draw(paper2, ht_gap = unit(2, "cm"))
+dev.off()
+
+
+
+
+```
+
+
+```{r Supp_fig_pearsonCorrelation}
+# Barplot of pearson correlation of random tree classifier
+paper.PCC <- feature.imps %>%
+  dplyr::select(meth, pcc, cv) %>% 
+  unique() %>%
+  group_by(meth) %>%
+  summarise(pcc=mean(pcc)) %>%
+  arrange(desc(pcc)) %>%
+  ggplot(aes(x = reorder(meth, pcc), y = pcc, fill=meth)) + 
+  geom_bar(stat = 'identity', show.legend = FALSE) +
+  labs(x='Method', y='PCC') + coord_flip() + ylim(0, 1) +
+  theme_cowplot(font_size = fs) + scale_fill_manual(values = col) +
+   geom_text(aes(label = sprintf("%.2f", pcc), y= pcc), hjust=-0.2, size = fs*0.36)
+
+# Print plot
+print(paper.PCC)
+
+# Save plot
+ggsave(paste0(output_path, "Supp_fig_pearsonCorrelation.pdf"),
+       paper.PCC, device = "pdf", width = 14, height = 10, units = "cm")
+```
+
+
+
+
+

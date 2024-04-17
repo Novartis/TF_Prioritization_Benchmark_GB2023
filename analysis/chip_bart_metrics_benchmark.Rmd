@@ -1,1 +1,166 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/chip_bart_metrics_benchmark.Rmd
+---
+title: "ChIP-seq BART benchmark using different metrics"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+# Introduction
+
+Underneath are some summary plots shown for the output of BART for all data sets in the benchmark. BART was run for each experiment in each data set using background peaks calculated by a differential peak analysis. For the plots underneath we calculated for each experiment on which rank BART finds the transcription factor examined in the study and then plot the distribution of all the ranks grouped by different variables of interest.
+
+```{r data_preparation}
+# Load libraries
+library(tidyverse)
+library(cowplot)
+library(ggsci)
+
+# Load utils.functions file
+source("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+# Define output path
+out.path <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/benchmark_data/chipseq_metrics/bart/'
+if(!dir.exists(out.path)) dir.create(out.path)
+
+# Read in all knownResults.txt output files from bart for every dataset
+bart.txts <- list.files("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/data/chipseq/",
+                          recursive = T, full.names = T, 
+                        pattern = 'diffPeak_bart_results.txt')
+
+
+var.dict <- c('statistic' = T, 'pvalue' = F, 'zscore' = T,
+              'max_auc' = T, 're_rank' = F, 'irwin_hall_pvalue' = F)
+
+# Create dataframe with dataset, experiment and motif name and their p-value
+readInbartTxt <- function(bart.txt) {
+  conds <- unlist(str_split(bart.txt, pattern = '/'))
+  bart.results <- read_tsv(bart.txt, show_col_types = FALSE) %>%
+  dplyr::rename(motif_name = 1) %>% # p_value = 6) %>%
+  mutate(study = conds[11], label = conds[16]) %>%
+  dplyr::select(study, label, motif_name, names(var.dict))
+  
+  bart.results <- bart.results %>%
+    mutate(possible_ranks=nrow(bart.results))
+ 
+  bart.results
+} 
+
+# Check if ranking results *.rds  exists
+if(!file.exists(file.path(out.path, "BART_benchmark.RDS"))) {
+  # Apply both function to the all experiments
+  bart.results <- lapply(bart.txts, readInbartTxt)  %>% bind_rows
+  
+  bart.list <- lapply(names(var.dict), function(x) bart.results) 
+  names(bart.list) <- names(var.dict)
+  
+  # Create empty topTen list and ROC/PR list for unstringent and stringent and info
+  top.ten <- sapply(names(bart.list),function(x) NULL)
+  roc.pr.str <- sapply(names(bart.list),function(x) NULL)
+  roc.pr.unstr <- sapply(names(bart.list),function(x) NULL)
+  info.df <- sapply(names(bart.list),function(x) NULL)
+  
+  # Create rankings 
+  for(bart.name in names(bart.list)) {
+    # Calculate for each experiment on what rank bart finds the transcription factor examined in the study
+    bart.list[[bart.name]] <- bart.list[[bart.name]] %>%
+      mutate(stringent = gsub('_\\(.*', '', motif_name),
+             label = gsub('H3K27(A|a)c_', '', label),
+             label = gsub("\\..*", "", label),
+             possible_ranks=max(possible_ranks),
+             tf = gsub('_.*', '', label)) %>%
+      unnest() %>%
+      filter(!is.na(stringent))
+    
+    l <- createSummaryDF(bart.list[[bart.name]], bart.name, desc=var.dict[[bart.name]], 
+                         lambert=FALSE)
+    
+    bart.list[[bart.name]] <- l$df
+    top.ten[[bart.name]] <- l$top.ten
+    roc.pr.str[[bart.name]] <- l$roc.pr.str
+    roc.pr.unstr[[bart.name]] <- l$roc.pr.unstr
+    info.df[[bart.name]] <- l$info.df
+  }
+  
+  
+} else {
+  # Read results
+  bart.list <- read_rds(file.path(out.path, "BART_benchmark.RDS"))
+  top.ten <- read_rds(file.path(out.path, "BART_topTen.RDS"))
+  roc.pr.str <- read_rds(file.path(out.path, "BART_roc_pr_str.RDS"))
+  roc.pr.unstr <- read_rds(file.path(out.path, "BART_roc_pr_unstr.RDS"))
+  info.df <- read_rds(file.path(out.path, "BART_info.RDS"))
+}
+```
+
+The number of studies BART succesfully run for: &emsp; `r length(bart.txts)` \
+
+The number of studies BART included the studied transcription factor in their results at all: &emsp; `r nrow(bart.list[["using no background peaks"]])`
+
+## BART rank analysis grouped by type {.tabset}
+
+```{r bart_rank_analysis1, results='asis'}
+bart.list <- rankBoxStudyType(bart.list, "BART")
+```
+
+## BART rank analysis grouped by transcription factor {.tabset}
+
+```{r bart_rank_analysis2, results='asis'}
+bart.list <- rankBoxTfFamily(bart.list, "BART")
+```
+
+## BART rank analysis grouped by number of replicates {.tabset}
+
+```{r bart_rank_analysis3, results='asis'}
+bart.list <- rankBoxReplicates(bart.list, "BART")
+```
+
+## BART rank analysis grouped by antibody type {.tabset}
+
+```{r bart_rank_analysis4, results='asis'}
+bart.list <- rankBoxAntibodyType(bart.list, "BART")
+```
+
+## BART rank analysis grouped by reference genome {.tabset}
+
+```{r bart_rank_analysis5, results='asis'}
+bart.list <- rankBoxRefGenome(bart.list, "BART")
+```
+
+## BART rank analysis grouped by bio sample {.tabset}
+
+```{r bart_rank_analysis6, results='asis'}
+bart.list <- rankBoxBioSample(bart.list, "BART")
+```
+
+## BART ROC curve {.tabset}
+
+```{r bart_roc, results='asis'}
+plotRoc(roc.pr.str, roc.pr.unstr, "BART")
+```
+
+## BART PR curve {.tabset}
+
+```{r bart_pr, results='asis'}
+plotPr(roc.pr.str, roc.pr.unstr, "BART")
+```
+
+```{r saveData}
+if(!file.exists(file.path(out.path, "BART_benchmark.RDS"))) {
+  # Save results as *.rds
+  saveRDS(bart.list, file=file.path(out.path, "BART_benchmark.RDS"))
+  saveRDS(top.ten, file=file.path(out.path, "BART_topTen.RDS"))
+  saveRDS(roc.pr.str, file=file.path(out.path, "BART_roc_pr_str.RDS"))
+  saveRDS(roc.pr.unstr, file=file.path(out.path, "BART_roc_pr_unstr.RDS"))
+  saveRDS(info.df, file=file.path(out.path, "BART_info.RDS"))
+}
+```

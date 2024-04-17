@@ -1,1 +1,153 @@
-/da/dmp/cb/steinse5/projects/tf_tool_benchmark/analysis/atac_monalisa_benchmark.Rmd
+---
+title: "ATAC-seq MonaLisa benchmark"
+author: "Leonor Schubert Santana"
+date: "`r Sys.Date()`" 
+site: workflowr::wflow_site
+output:
+   workflowr::wflow_html:
+    toc: false
+    code_folding: hide
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo=T, warning=F, message=F)
+```
+
+# Introduction
+
+Underneath are some summary plots shown for the output of monaLisa for all data sets in the benchmark. MonaLisa was run for each experiment in each data set using background peaks calculated by a differential peak analysis. For the plots underneath we calculated for each experiment on which rank monaLisa finds the transcription factor examined in the study and then plot the distribution of all the ranks grouped by different variables of interest.
+
+```{r data_preparation}
+# Load libraries
+library(tidyverse)
+library(cowplot)
+library(ggsci)
+
+# Load utils.functions file
+source("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/code/R/utils_functions.R")
+
+# Define output path
+out.path <- '/da/dmp/cb/steinse5/projects/tf_tool_benchmark/output/benchmark_data/atacseq/monalisa/'
+
+# Read in all output files from monaLisa for every dataset
+monalisa.txts <- list.files("/da/dmp/cb/steinse5/projects/tf_tool_benchmark/data/atacseq/",
+                          recursive = T, full.names = T, pattern = 'monaLisa_results.txt')
+
+# Create dataframe with dataset, experiment and motif name and their p-value
+readInMonalisaTxt <- function(monalisa.txt) {
+  conds <- unlist(str_split(monalisa.txt, pattern = '/'))
+  monalisa.results <- read_tsv(monalisa.txt, show_col_types = FALSE) %>%
+    dplyr::rename(motif_name = 4, auc = 3) %>%
+    mutate(study = conds[11], label = conds[16], possible_ranks=length(motif_name)) %>%
+    dplyr::select(study, label, motif_name, auc, possible_ranks)
+ 
+  monalisa.results
+} 
+
+# Check if ranking results *.rds  exists
+if(!file.exists(file.path(out.path, "monaLisa_benchmark.RDS"))) {
+  
+  # Apply both function to the all experiments
+  monalisa.results <- lapply(monalisa.txts, readInMonalisaTxt)  %>% bind_rows
+  
+  monalisa.list <- list('using no background' = monalisa.results)
+  
+  # Create empty topTen list and ROC/PR list for unstringent and stringent and info
+  top.ten <- sapply(names(monalisa.list),function(x) NULL)
+  roc.pr.str <- sapply(names(monalisa.list),function(x) NULL)
+  roc.pr.unstr <- sapply(names(monalisa.list),function(x) NULL)
+  info.df <- sapply(names(monalisa.list),function(x) NULL)
+  topMotifs.df <- sapply(names(monalisa.list),function(x) NULL)
+  
+  
+  # Create rankings 
+  for(monalisa.name in names(monalisa.list)) {
+    l <- createSummaryDF(monalisa.list[[monalisa.name]], "auc", desc=TRUE, 
+                         lambert=TRUE)
+    
+    monalisa.list[[monalisa.name]] <- l$df
+    top.ten[[monalisa.name]] <- l$top.ten
+    roc.pr.str[[monalisa.name]] <- l$roc.pr.str
+    roc.pr.unstr[[monalisa.name]] <- l$roc.pr.unstr
+    info.df[[monalisa.name]] <- l$info.df
+    topMotifs.df[[monalisa.name]] <- l$topMotifs.df
+  }
+  
+  
+} else {
+  # Read results
+  monalisa.list <- read_rds(file.path(out.path, "monaLisa_benchmark.RDS"))
+  top.ten <- read_rds(file.path(out.path, "monaLisa_topTen.RDS"))
+  roc.pr.str <- read_rds(file.path(out.path, "monaLisa_roc_pr_str.RDS"))
+  roc.pr.unstr <- read_rds(file.path(out.path, "monaLisa_roc_pr_unstr.RDS"))
+  info.df <- read_rds(file.path(out.path, "monaLisa_info.RDS"))
+}
+
+```
+
+The number of studies monaLisa succesfully run for: &emsp; `r length(monalisa.txts)` \
+
+The number of studies monaLisa included the studied transcription factor in their results at all: &emsp; `r nrow(monalisa.list[[1]])`
+
+
+## MonaLisa rank analysis grouped by type {.tabset}
+
+```{r monalisa_rank_analysis1, results='asis'}
+monalisa.list <- rankBoxStudyType(monalisa.list, "monaLisa")
+```
+
+## MonaLisa rank analysis grouped by transcription factor {.tabset}
+
+```{r monalisa_rank_analysis2, results='asis'}
+monalisa.list <- rankBoxTfFamily(monalisa.list, "monaLisa")
+```
+
+## MonaLisa rank analysis grouped by number of replicates {.tabset}
+
+```{r monalisa_rank_analysis3, results='asis'}
+monalisa.list <- rankBoxReplicates(monalisa.list, "monaLisa")
+```
+
+## MonaLisa rank analysis grouped by antibody type {.tabset}
+
+```{r monalisa_rank_analysis4, results='asis'}
+monalisa.list <- rankBoxAntibodyType(monalisa.list, "monaLisa")
+```
+
+## MonaLisa rank analysis grouped by reference genome {.tabset}
+
+```{r monalisa_rank_analysis5, results='asis'}
+monalisa.list <- rankBoxRefGenome(monalisa.list, "monaLisa")
+```
+
+## MonaLisa rank analysis grouped by bio sample {.tabset}
+
+```{r monalisa_rank_analysis6, results='asis'}
+monalisa.list <- rankBoxBioSample(monalisa.list, "monaLisa")
+```
+
+## MonaLisa ROC curve {.tabset}
+
+```{r monalisa_roc, results='asis'}
+plotRoc(roc.pr.str, roc.pr.unstr, "monaLisa")
+```
+
+## MonaLisa PR curve {.tabset}
+
+```{r monalisa_pr, results='asis'}
+plotPr(roc.pr.str, roc.pr.unstr, "monaLisa")
+```
+
+```{r saveData}
+if(!file.exists(file.path(out.path, "monaLisa_benchmark.RDS"))) {
+  # Save results as *.rds
+  saveRDS(monalisa.list, file=file.path(out.path, "monaLisa_benchmark.RDS"))
+  saveRDS(top.ten, file=file.path(out.path, "monaLisa_topTen.RDS"))
+  saveRDS(roc.pr.str, file=file.path(out.path, "monaLisa_roc_pr_str.RDS"))
+  saveRDS(roc.pr.unstr, file=file.path(out.path, "monaLisa_roc_pr_unstr.RDS"))
+  saveRDS(info.df, file=file.path(out.path, "monaLisa_info.RDS"))
+  saveRDS(topMotifs.df, file=file.path(out.path, "monaLisa_topMotifs_lambert.RDS"))
+}
+```
